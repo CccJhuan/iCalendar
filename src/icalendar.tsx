@@ -1,5 +1,7 @@
 import * as React from 'react';
 import { useState, useMemo, useEffect } from 'react';
+// 🌟 修复：必须显式导入 TFile，否则 TS 会将其误认为 DOM 的 File
+import { TFile, Notice } from 'obsidian';
 import type { TaskItem } from './main';
 import type ICalendarPlugin from './main';
 
@@ -28,40 +30,61 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
 
     useEffect(() => {
         let isMounted = true;
-
         const loadData = async () => {
-            setIsLoading(true);
-            const data = await plugin.fetchTasksFromDataview();
-            if (isMounted) {
-                setTasks(data);
-                setIsLoading(false);
+            try {
+                // 根据你目前使用的架构获取数据
+                // (如果你没改架构，就是 fetchTasksFromDataview；如果改了就是 getTasksFromCache)
+                const data = await plugin.fetchTasksFromDataview(); 
+                if (isMounted) {
+                    setTasks(data);
+                }
+            } catch (err) {
+                console.error("iCalendar 数据加载异常:", err);
+            } finally {
+                // 🌟 核心修复：无论成功还是失败，强制切断加载状态
+                if (isMounted) {
+                    setIsLoading(false);
+                }
             }
         };
-        
-        setTimeout(() => { void loadData(); }, 300);
+        // 🌟 核心修复：处理 Obsidian 启动时 Dataview 加载的时差问题
+        const initEngine = () => {
+            const dv = plugin.getDataviewAPI();
+            if (dv) {
+                void loadData(); // Dataview 已就绪，直接加载
+            } else {
+                // Dataview 未就绪，给予 1.5 秒的缓冲时间后强制执行
+                // 即使最后没取到 dv，finally 也会确保页面显示“无任务”而不是无限加载
+                window.setTimeout(() => {
+                    void loadData();
+                }, 1500);
+            }
+        };
 
-        const handleMetadataChange = async () => {
-            if (!isMounted) return;
-            const data = await plugin.fetchTasksFromDataview();
-            setTasks(data);
+        initEngine();
+
+        const refreshUI = async () => {
+            const data = await plugin.getTasksFromCache(); // 从 Map 展平，O(n) 操作
+            if (isMounted) setTasks(data);
         };
-        
-        // 🌟 修复 NodeJS.Timeout 报错，改用 window.setTimeout 返回的 number 类型
-        let timeoutId: number;
-        const debouncedHandler = () => {
-            window.clearTimeout(timeoutId);
-            timeoutId = window.setTimeout(() => {
-                void handleMetadataChange();
-            }, 1000);
-        };
-        
-        // 🌟 核心修复 1：将自定义事件强制伪装成官方的 'changed' 事件，彻底消灭 any 参数报错
-        const eventRef = plugin.app.metadataCache.on('dataview:metadata-change' as 'changed', debouncedHandler);
+
+        // 🌟 增量监听：Dataview 告诉我们哪个文件变了
+        const eventRef = (plugin.app.metadataCache as any).on('dataview:metadata-change', (op: string, file: TFile) => {
+            const dv = plugin.getDataviewAPI();
+            if (!dv) return;
+            
+            const page = dv.page(file.path);
+            if (page) {
+                plugin.updateFileCache(page);
+                void refreshUI();
+            }
+        });
+
+        void refreshUI(); // 初始加载
 
         return () => {
             isMounted = false;
-            window.clearTimeout(timeoutId);
-            plugin.app.metadataCache.offref(eventRef);
+            (plugin.app.metadataCache as any).offref(eventRef);
         };
     }, [plugin]);
 
@@ -83,25 +106,76 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         (e.currentTarget as HTMLElement).removeClass('dragging');
     };
 
-    const handleDrop = async (e: React.DragEvent<HTMLDivElement>, newDate: string | null, newPrio: number | null) => {
+    const handleDrop = async (e: React.DragEvent<HTMLDivElement>, newDate: string | null, newPrio: number | string | null) => {
         e.preventDefault();
         const data = e.dataTransfer.getData('application/json');
         if (!data) return;
         try {
             // 🌟 核心修复 2：使用 unknown 安全过渡 JSON.parse 的隐式 any 返回值
             const draggedTask = JSON.parse(data) as unknown as TaskItem;
-            setTasks(prev => prev.map(t => {
-                if (t.path === draggedTask.path && t.line === draggedTask.line) {
-                    return { ...t, date: newDate || t.date, priority: newPrio !== null ? newPrio : t.priority };
+            const originalTaskState = { ...draggedTask };
+            // --- 场景 1: 拖入“已完成”分组 ---
+            if (newPrio === 'done') {
+                if (draggedTask.type === 'todo') {
+                    setTasks(prev => prev.map(t => (t.path === draggedTask.path && t.line === draggedTask.line) ? { ...t, type: 'done' } : t));
+                    await plugin.toggleTask(draggedTask);
+                    showUndoNotice("任务已完成", originalTaskState);
                 }
-                return t;
-            }));
-            await plugin.updateTaskMetadata(draggedTask, newDate, newPrio);
-        } catch {
-            console.error("Drop payload parsing failed");
-        }
-    };
+                return;
+            }
 
+            // --- 场景 2: 将“已完成”任务拖回普通优先级（激活任务） ---
+            if (typeof newPrio === 'number' && draggedTask.type === 'done') {
+                // 1. 乐观更新 UI（状态转为 todo，优先级设为新值）
+                setTasks(prev => prev.map(t => (t.path === draggedTask.path && t.line === draggedTask.line) ? { ...t, type: 'todo', priority: newPrio } : t));
+                // 2. 写入文件：先取消复选框
+                await plugin.toggleTask(draggedTask); 
+                // 3. 写入文件：更新优先级图标 [🌟 关键位置 A]
+                await plugin.updateTaskMetadata(draggedTask, newDate, newPrio);
+                return; // 场景 2 结束
+            }
+
+            // --- 场景 3: 标准元数据修改（修改日期或修改优先级） ---
+            // 1. 乐观更新 UI
+
+            // 2. 写入文件同步 [🌟 关键位置 B]
+            // 这里会处理正向的日期变更或优先级图标替换
+            // 修改日期或优先级场景
+            setTasks(prev => prev.map(t => (t.path === draggedTask.path && t.line === draggedTask.line) 
+                ? { ...t, date: newDate || t.date, priority: typeof newPrio === 'number' ? newPrio : t.priority } 
+                : t));
+            await plugin.updateTaskMetadata(draggedTask, newDate, newPrio);
+            showUndoNotice("任务已更新", originalTaskState);
+
+        } catch (err) {
+            console.error("Drop sync failed:", err);
+        }
+        
+    };
+    // 🌟 核心：显示带撤销按钮的通知
+    const showUndoNotice = (message: string, originalState: TaskItem) => {
+        const notice = new Notice("", 5000); // 5秒消失
+        const container = notice.noticeEl;
+        container.empty();
+        
+        const span = container.createEl('span', { text: `${message} ` });
+        const undoBtn = container.createEl('a', { 
+            text: "撤销", 
+            cls: "icalendar-undo-link" // 可以在 CSS 中定义样式
+        });
+
+        undoBtn.onclick = async () => {
+            // 1. UI 回滚
+            setTasks(prev => prev.map(t => (t.path === originalState.path && t.line === originalState.line) ? originalState : t));
+            
+            // 2. 文件回滚：根据原始状态重新写入
+            // 注意：这里需要根据 originalState 的 type 和 priority 还原
+            await plugin.revertTask(originalState);
+            
+            notice.hide();
+            new Notice("已撤销修改");
+        };
+    };
     const handleCheckboxClick = async (task: TaskItem) => {
         setTasks(prev => prev.map(t => {
             if(t.path === task.path && t.line === task.line) {
@@ -147,14 +221,30 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         const dayTasks = sortedTasks.filter(t => t.date === dateStr);
         if (dayTasks.length === 0) return <div style={{textAlign: 'center', color: 'var(--text-sub)', padding: '40px', width: '100%'}}>☕️ 此日无计划任务</div>;
 
+        // --- 1. 重新定义分组逻辑 ---
         const groups: Record<string, TaskItem[]> = {};
         dayTasks.forEach(t => {
-            const key = groupMode === 'priority' ? String(t.priority) : t.fileName;
+            // 🌟 核心修改：在“优先”模式下，完成的任务强制归入 'done' 分组
+            let key: string;
+            if (groupMode === 'priority') {
+                key = t.type === 'done' ? 'done' : String(t.priority);
+            } else {
+                key = t.fileName;
+            }
+
             if (!groups[key]) groups[key] = [];
             groups[key]?.push(t);
         });
 
-        const groupKeys = Object.keys(groups).sort((a, b) => groupMode === 'priority' ? Number(b) - Number(a) : a.localeCompare(b));
+        // --- 2. 重新定义排序逻辑 ---
+        const groupKeys = Object.keys(groups).sort((a, b) => {
+            if (groupMode === 'priority') {
+                if (a === 'done') return 1;  // 'done' 组永远排在最后
+                if (b === 'done') return -1;
+                return Number(b) - Number(a); // 5 -> 0 降序
+            }
+            return a.localeCompare(b);
+        });
 
         return (
             <div className="file-groups-container">
@@ -163,15 +253,26 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                     const firstTask = groupTasks[0];
                     if (!firstTask) return null;
 
-                    const cardClass = groupMode === 'priority' ? `prio-group-${key}` : `group-type-${firstTask.colorIndex}`;
-                    const headerText = groupMode === 'priority' ? (PRIORITY_MAP[Number(key)]?.label || key) : key;
+                    // --- 3. 动态渲染样式与标题 (即你询问的部分) ---
+                    const isDoneGroup = key === 'done';
+                    const cardClass = groupMode === 'priority' 
+                        ? (isDoneGroup ? 'prio-group-done' : `prio-group-${key}`) 
+                        : `group-type-${firstTask.colorIndex}`;
+
+                    const headerText = groupMode === 'priority' 
+                        ? (isDoneGroup ? '✅ 已完成' : (PRIORITY_MAP[Number(key)]?.label || key)) 
+                        : key;
 
                     return (
                         <div 
                             key={key} className={`file-group-card ${cardClass}`}
-                            onDragOver={e => { if (groupMode === 'priority') { e.preventDefault(); (e.currentTarget as HTMLElement).addClass('drop-zone-active'); } }}
-                            onDragLeave={e => { if (groupMode === 'priority') { (e.currentTarget as HTMLElement).removeClass('drop-zone-active'); } }}
-                            onDrop={e => { if (groupMode === 'priority') { (e.currentTarget as HTMLElement).removeClass('drop-zone-active'); void handleDrop(e, null, Number(key)); } }}
+                            onDragOver={e => { e.preventDefault(); (e.currentTarget as HTMLElement).addClass('drop-zone-active'); }}
+                            onDragLeave={e => (e.currentTarget as HTMLElement).removeClass('drop-zone-active')}
+                            onDrop={e => { 
+                                (e.currentTarget as HTMLElement).removeClass('drop-zone-active'); 
+                                // 🌟 这里传入 isDoneGroup 判断
+                                void handleDrop(e, null, isDoneGroup ? 'done' : Number(key)); 
+                            }}
                         >
                             <div className="file-group-header">{headerText}</div>
                             {groupTasks.map((t, idx) => (
@@ -180,11 +281,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                                     <div className="task-content-wrapper">
                                         <a className="internal-link-wrapper internal-link" data-href={t.path} href={t.path}>
                                             <div className="task-text">
-                                                {groupMode !== 'priority' && PRIORITY_MAP[t.priority]?.icon && `${PRIORITY_MAP[t.priority]?.icon} `}{t.content}
+                                                {/* 🌟 在已完成组里，就不需要再显示优先级图标了，保持简洁 */}
+                                                {!isDoneGroup && groupMode !== 'priority' && PRIORITY_MAP[t.priority]?.icon && `${PRIORITY_MAP[t.priority]?.icon} `}
+                                                {t.content}
                                             </div>
                                         </a>
                                         <div className="tag-container">
-                                            {groupMode === 'priority' && <div className="task-tag file-tag">{t.fileName}</div>}
+                                            {(groupMode === 'priority' || isDoneGroup) && <div className="task-tag file-tag">{t.fileName}</div>}
                                             {t.tags.map((tag, i) => <div key={i} className="task-tag">{tag}</div>)}
                                         </div>
                                     </div>
@@ -239,12 +342,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
 
             const groups: Record<string, TaskItem[]> = {};
             dTasks.forEach(t => {
-                const key = groupMode === 'priority' ? String(t.priority) : t.fileName;
+                const key = (groupMode === 'priority' && t.type === 'done') ? 'done' : (groupMode === 'priority' ? String(t.priority) : t.fileName);
                 if (!groups[key]) groups[key] = [];
                 groups[key]?.push(t);
             });
-            const groupKeys = Object.keys(groups).sort((a, b) => groupMode === 'priority' ? Number(b) - Number(a) : a.localeCompare(b));
-
+            const groupKeys = Object.keys(groups).sort((a, b) => {
+                if (groupMode === 'priority') {
+                    if (a === 'done') return 1;
+                    if (b === 'done') return -1;
+                    return Number(b) - Number(a);
+                }
+                return a.localeCompare(b);
+            });
             cols.push(
                 <div 
                     key={dateStr} className={`week-col ${isToday ? 'today' : ''} ${isPast ? 'past' : ''}`}
@@ -355,8 +464,30 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         );
     };
 
-    if (isLoading) return (<div className={`task-dashboard-container ${densityClass}`} style={{justifyContent: 'center', alignItems: 'center'}}><h2 style={{color: 'var(--text-sub)', opacity: 0.7}}>🚀 引擎正在加载...</h2></div>);
-
+    if (isLoading) {
+        return (
+            <div 
+                className={`task-dashboard-container ${densityClass}`} 
+                style={{ 
+                    display: 'flex', 
+                    justifyContent: 'center', 
+                    alignItems: 'center',
+                    width: '100%',
+                    height: '100%'
+                }}
+            >
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+                    {/* 🌟 核心修复：显式声明 textAlign 覆盖 Obsidian 默认设定，取消默认 margin */}
+                    <h2 style={{ color: 'var(--text-sub)', opacity: 0.7, margin: 0, textAlign: 'center' }}>
+                        🚀 引擎正在加载...
+                    </h2>
+                    <div style={{ marginTop: '12px', color: 'var(--text-muted)', fontSize: '0.85em' }}>
+                        正在同步本地数据图谱
+                    </div>
+                </div>
+            </div>
+        );
+    }
     return (
         <div className={`task-dashboard-container ${densityClass}`}>
             <div className="fixed-top-area">

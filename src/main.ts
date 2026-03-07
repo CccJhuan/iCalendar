@@ -7,6 +7,16 @@ import { Dashboard } from './icalendar';
 
 export const VIEW_TYPE_ICALENDAR = "icalendar-view";
 
+const REGEX = {
+    DATE: /(?:📅|⏳|🛫)\s*(\d{4}-\d{2}-\d{2})/u,
+    DONE_DATE: /✅\s*(\d{4}-\d{2}-\d{2})/u,
+    TAG: /#[\w\u4e00-\u9fa5/]+/g,
+    PRIORITY: /(?:🔺|⏫|🔼|🔽|⏬)/gu,
+    TASK_MARKER: /-\s\[([\sxX])\]/
+};
+
+const PRIO_ICONS: Record<number, string> = { 5: '🔺', 4: '⏫', 3: '🔼', 1: '🔽', 0: '⏬' };
+
 export interface TaskItem {
     content: string;
     date: string | null;
@@ -32,6 +42,7 @@ interface DataviewTask {
 interface DataviewPage {
     file: {
         name: string;
+        path: string; // 🌟 修复：添加 path 属性
         tasks?: DataviewTask[];
         day?: {
             toISODate: () => string;
@@ -41,6 +52,7 @@ interface DataviewPage {
 
 interface DataviewAPI {
     pages(query: string): DataviewPage[];
+    page(path: string): DataviewPage | undefined; // 🌟 修复：添加 page 方法定义
 }
 
 export class ICalendarView extends ItemView {
@@ -90,7 +102,7 @@ export class ICalendarView extends ItemView {
 
 export default class ICalendarPlugin extends Plugin {
     settings!: ICalendarSettings; // 使用 ! 断言它一定会在 onload 中初始化
-
+    private taskCache: Map<string, TaskItem[]> = new Map();
     async onload(): Promise<void> {
         await this.loadSettings();
 
@@ -112,10 +124,86 @@ export default class ICalendarPlugin extends Plugin {
                 void this.activateView();
             }
         });
+        this.app.workspace.onLayoutReady(() => {
+            void this.initialFetch();
+        });
+
 
         this.addSettingTab(new ICalendarSettingTab(this.app, this));
     }
+    private async initialFetch() {
+        const dv = this.getDataviewAPI();
+        if (!dv) return;
+        const pages = dv.pages('""');
+        for (const page of pages) {
+            this.updateFileCache(page);
+        }
+    }
+    public updateFileCache(page: DataviewPage) {
+        if (!page.file.tasks) {
+            this.taskCache.delete(page.file.path);
+            return;
+        }
+        
+        const fileTasks: TaskItem[] = [];
+        const fileDate = page.file.day ? page.file.day.toISODate() : null;
 
+        for (const t of page.file.tasks) {
+            // 使用预编译的 REGEX 对象进行解析（逻辑同你原有的 fetch，但更快）
+            const parsedTask = this.parseDataviewTask(t, page.file.name, fileDate);
+            if (parsedTask) fileTasks.push(parsedTask);
+        }
+        
+        this.taskCache.set(page.file.path, fileTasks);
+    }
+    private parseDataviewTask(t: DataviewTask, fileName: string, fileDate: string | null): TaskItem | null {
+        let taskDate: string | null = null;
+        let type: 'todo' | 'done' = t.completed ? 'done' : 'todo';
+
+        if (t.completed) {
+            const cMatch = t.text.match(REGEX.DONE_DATE);
+            taskDate = cMatch?.[1] || (t.completion ? window.moment(t.completion).format('YYYY-MM-DD') : null);
+        } else {
+            const dMatch = t.text.match(REGEX.DATE);
+            taskDate = dMatch?.[1] || null;
+        }
+
+        if (!taskDate && fileDate) taskDate = fileDate;
+        if (!taskDate) return null; // 依然保留你的逻辑：无日期不显示
+
+        const rawText = t.text;
+        // 计算优先级
+        let priorityLevel = 2;
+        const prioMatch = rawText.match(REGEX.PRIORITY);
+        if (prioMatch) {
+            const icon = prioMatch[0];
+            priorityLevel = Object.keys(PRIO_ICONS).find(k => PRIO_ICONS[Number(k)] === icon) ? Number(Object.keys(PRIO_ICONS).find(k => PRIO_ICONS[Number(k)] === icon)) : 2;
+        }
+
+        return {
+            content: this.cleanTaskText(rawText),
+            date: taskDate,
+            type,
+            priority: priorityLevel,
+            path: t.path,
+            line: t.line,
+            fileName,
+            colorIndex: (fileName.length % 3) + 1,
+            tags: rawText.match(REGEX.TAG) || [],
+            originalText: rawText
+        };
+    }
+    private cleanTaskText(text: string): string {
+        return text
+            .replace(REGEX.DONE_DATE, '')
+            .replace(REGEX.DATE, '')
+            .replace(REGEX.TAG, '')
+            .replace(REGEX.PRIORITY, '')
+            .trim();
+    }
+    async getTasksFromCache(): Promise<TaskItem[]> {
+        return Array.from(this.taskCache.values()).flat();
+    }
     async activateView(): Promise<void> {
         const { workspace } = this.app;
         let leaf: WorkspaceLeaf | null = null;
@@ -225,7 +313,22 @@ export default class ICalendarPlugin extends Plugin {
         }
         return allTasks;
     }
+    async revertTask(originalTask: TaskItem): Promise<void> {
+        const file = this.app.vault.getAbstractFileByPath(originalTask.path);
+        if (!(file instanceof TFile)) return;
 
+        const content = await this.app.vault.read(file);
+        const lines = content.split('\n');
+        let lineStr = lines[originalTask.line];
+        
+        // 基础校验：如果当前行完全不包含原始内容，说明文件可能被外部大幅篡改，放弃回滚
+        if (!lineStr) return;
+
+        // 🌟 强制恢复到原始文本（这是最简单且最暴力有效的回滚方式）
+        lines[originalTask.line] = originalTask.originalText;
+        
+        await this.app.vault.modify(file, lines.join('\n'));
+    }
     async toggleTask(task: TaskItem): Promise<void> {
         const file = this.app.vault.getAbstractFileByPath(task.path);
         if (!(file instanceof TFile)) return;
@@ -248,7 +351,10 @@ export default class ICalendarPlugin extends Plugin {
         await this.app.vault.modify(file, lines.join('\n'));
     }
 
-    async updateTaskMetadata(task: TaskItem, newDateStr: string | null, newPriority: number | null): Promise<void> {
+    async updateTaskMetadata(task: TaskItem, newDateStr: string | null, newPriority: number | string | null): Promise<void> {
+        // 如果优先级是字符串 'done'，则此处不处理优先级逻辑，由 toggleTask 处理
+        const finalPriority = typeof newPriority === 'number' ? newPriority : null;
+        
         const file = this.app.vault.getAbstractFileByPath(task.path);
         if (!(file instanceof TFile)) return;
 
@@ -258,7 +364,6 @@ export default class ICalendarPlugin extends Plugin {
         if (lineStr === undefined) return;
 
         if (newDateStr) {
-            // 🌟 再次使用非捕获组替代字符组
             const dateRegex = /((?:📅|⏳|🛫)\s*)\d{4}-\d{2}-\d{2}/u;
             if (dateRegex.test(lineStr)) {
                 lineStr = lineStr.replace(dateRegex, `$1${newDateStr}`);
@@ -267,16 +372,15 @@ export default class ICalendarPlugin extends Plugin {
             }
         }
 
-        if (newPriority !== null) {
-            // 🌟 加入 /u 修饰符
+        if (finalPriority !== null) {
             const prioRegex = /(?:🔺|⏫|🔼|🔽|⏬)/gu;
             const iconMap: Record<number, string> = { 5: '🔺', 4: '⏫', 3: '🔼', 2: '', 1: '🔽', 0: '⏬' };
-            const newIcon = iconMap[newPriority] ?? '';
+            const newIcon = iconMap[finalPriority] ?? '';
             
             lineStr = lineStr.replace(prioRegex, ''); 
             lineStr = lineStr.replace(/\s+/g, ' ').trimEnd(); 
             
-            if (newPriority !== 2) { 
+            if (finalPriority !== 2) { 
                 lineStr += ` ${newIcon}`;
             }
         }

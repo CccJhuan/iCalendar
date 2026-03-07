@@ -162,7 +162,15 @@
 .prio-group-3 { border-top: 4px solid var(--priority-med); }
 .prio-group-2 { border-top: 4px solid var(--morandi-1); }
 .prio-group-1, .prio-group-0 { border-top: 4px solid var(--priority-low); }
+.prio-group-done {
+    border-top: 4px solid var(--text-muted) !important;
+    opacity: 0.7;
+    background: transparent !important;
+}
 
+.prio-group-done .file-group-header {
+    color: var(--text-muted);
+}
 /* =========================================
    🌟 核心功能：紧凑模式 (Compact Density) 
    ========================================= */
@@ -189,4 +197,14 @@
 }
 .density-compact .task-text {
     font-size: 0.95em;
+}
+.icalendar-undo-link {
+    color: var(--text-accent);
+    text-decoration: underline;
+    cursor: pointer;
+    margin-left: 8px;
+    font-weight: bold;
+}
+.icalendar-undo-link:hover {
+    color: var(--text-accent-hover);
 }
