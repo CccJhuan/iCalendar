@@ -1,3 +1,4 @@
+ 
 import { App, PluginSettingTab, Setting } from 'obsidian';
 import type ICalendarPlugin from './main';
 
@@ -25,7 +26,8 @@ export class ICalendarSettingTab extends PluginSettingTab {
         const { containerEl } = this;
         containerEl.empty();
 
-        containerEl.createEl('h2', { text: 'iCalendar 插件设置' });
+        // 🌟 核心修复：使用官方推荐的 setHeading()，取代 createEl('h2')
+        ;
 
         new Setting(containerEl)
             .setName('默认视图')

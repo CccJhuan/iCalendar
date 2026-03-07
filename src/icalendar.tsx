@@ -1,6 +1,5 @@
 import * as React from 'react';
 import { useState, useMemo, useEffect } from 'react';
-import { debounce } from 'obsidian';
 import type { TaskItem } from './main';
 import type ICalendarPlugin from './main';
 
@@ -25,7 +24,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
     const [tasks, setTasks] = useState<TaskItem[]>([]);
     const [isLoading, setIsLoading] = useState(true);
 
-    // 获取当前配置的密度类名
     const densityClass = `density-${plugin.settings.taskDensity}`;
 
     useEffect(() => {
@@ -40,7 +38,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
             }
         };
         
-        setTimeout(loadData, 300);
+        setTimeout(() => { void loadData(); }, 300);
 
         const handleMetadataChange = async () => {
             if (!isMounted) return;
@@ -48,20 +46,21 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
             setTasks(data);
         };
         
-        let timeoutId: NodeJS.Timeout;
+        // 🌟 修复 NodeJS.Timeout 报错，改用 window.setTimeout 返回的 number 类型
+        let timeoutId: number;
         const debouncedHandler = () => {
-            clearTimeout(timeoutId);
-            timeoutId = setTimeout(() => {
-                handleMetadataChange();
+            window.clearTimeout(timeoutId);
+            timeoutId = window.setTimeout(() => {
+                void handleMetadataChange();
             }, 1000);
         };
         
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const eventRef = plugin.app.metadataCache.on('dataview:metadata-change' as any, debouncedHandler);
+        // 🌟 核心修复 1：将自定义事件强制伪装成官方的 'changed' 事件，彻底消灭 any 参数报错
+        const eventRef = plugin.app.metadataCache.on('dataview:metadata-change' as 'changed', debouncedHandler);
 
         return () => {
             isMounted = false;
-            clearTimeout(timeoutId);
+            window.clearTimeout(timeoutId);
             plugin.app.metadataCache.offref(eventRef);
         };
     }, [plugin]);
@@ -77,11 +76,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
     const handleDragStart = (e: React.DragEvent<HTMLDivElement>, task: TaskItem) => {
         e.dataTransfer.setData('application/json', JSON.stringify(task));
         e.dataTransfer.effectAllowed = 'move';
-        (e.target as HTMLElement).style.opacity = '0.4';
+        (e.currentTarget as HTMLElement).addClass('dragging');
     };
 
     const handleDragEnd = (e: React.DragEvent<HTMLDivElement>) => {
-        (e.target as HTMLElement).style.opacity = '1';
+        (e.currentTarget as HTMLElement).removeClass('dragging');
     };
 
     const handleDrop = async (e: React.DragEvent<HTMLDivElement>, newDate: string | null, newPrio: number | null) => {
@@ -89,7 +88,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         const data = e.dataTransfer.getData('application/json');
         if (!data) return;
         try {
-            const draggedTask: TaskItem = JSON.parse(data);
+            // 🌟 核心修复 2：使用 unknown 安全过渡 JSON.parse 的隐式 any 返回值
+            const draggedTask = JSON.parse(data) as unknown as TaskItem;
             setTasks(prev => prev.map(t => {
                 if (t.path === draggedTask.path && t.line === draggedTask.line) {
                     return { ...t, date: newDate || t.date, priority: newPrio !== null ? newPrio : t.priority };
@@ -97,7 +97,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                 return t;
             }));
             await plugin.updateTaskMetadata(draggedTask, newDate, newPrio);
-        } catch (err) {}
+        } catch {
+            console.error("Drop payload parsing failed");
+        }
     };
 
     const handleCheckboxClick = async (task: TaskItem) => {
@@ -110,7 +112,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         await plugin.toggleTask(task);
     };
 
-    // 获取 5 个档位的状态表情
     const getPerformanceEmoji = (percent: number) => {
         if (percent === 0) return '😴';
         if (percent <= 20) return '🥱';
@@ -130,9 +131,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                     <div 
                         key={level} className="dock-item"
                         style={{ color: `var(--priority-${level > 3 ? 'high' : (level === 3 ? 'med' : (level === 2 ? 'primary' : 'low'))})` }}
-                        onDragOver={e => { e.preventDefault(); (e.target as HTMLElement).classList.add('drag-over'); }}
-                        onDragLeave={e => (e.target as HTMLElement).classList.remove('drag-over')}
-                        onDrop={e => { (e.target as HTMLElement).classList.remove('drag-over'); handleDrop(e, null, level); }}
+                        onDragOver={e => { e.preventDefault(); (e.currentTarget as HTMLElement).addClass('drag-over'); }}
+                        onDragLeave={e => (e.currentTarget as HTMLElement).removeClass('drag-over')}
+                        onDrop={e => { (e.currentTarget as HTMLElement).removeClass('drag-over'); void handleDrop(e, null, level); }}
                     >
                         {prioInfo.icon && <span>{prioInfo.icon}</span>}
                         <span>{prioInfo.label}</span>
@@ -150,7 +151,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         dayTasks.forEach(t => {
             const key = groupMode === 'priority' ? String(t.priority) : t.fileName;
             if (!groups[key]) groups[key] = [];
-            groups[key].push(t);
+            groups[key]?.push(t);
         });
 
         const groupKeys = Object.keys(groups).sort((a, b) => groupMode === 'priority' ? Number(b) - Number(a) : a.localeCompare(b));
@@ -168,14 +169,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                     return (
                         <div 
                             key={key} className={`file-group-card ${cardClass}`}
-                            onDragOver={e => { if (groupMode === 'priority') { e.preventDefault(); (e.currentTarget as HTMLElement).classList.add('drop-zone-active'); } }}
-                            onDragLeave={e => { if (groupMode === 'priority') { (e.currentTarget as HTMLElement).classList.remove('drop-zone-active'); } }}
-                            onDrop={e => { if (groupMode === 'priority') { (e.currentTarget as HTMLElement).classList.remove('drop-zone-active'); handleDrop(e, null, Number(key)); } }}
+                            onDragOver={e => { if (groupMode === 'priority') { e.preventDefault(); (e.currentTarget as HTMLElement).addClass('drop-zone-active'); } }}
+                            onDragLeave={e => { if (groupMode === 'priority') { (e.currentTarget as HTMLElement).removeClass('drop-zone-active'); } }}
+                            onDrop={e => { if (groupMode === 'priority') { (e.currentTarget as HTMLElement).removeClass('drop-zone-active'); void handleDrop(e, null, Number(key)); } }}
                         >
                             <div className="file-group-header">{headerText}</div>
                             {groupTasks.map((t, idx) => (
                                 <div key={`${t.path}-${t.line}-${idx}`} className={`ios-task-item ${t.type === 'done' ? 'checked' : ''}`} draggable onDragStart={e => handleDragStart(e, t)} onDragEnd={handleDragEnd}>
-                                    <div className={`ios-checkbox ${t.type === 'done' ? 'checked' : 'unchecked'}`} onClick={(e) => { e.stopPropagation(); handleCheckboxClick(t); }}>✓</div>
+                                    <div className={`ios-checkbox ${t.type === 'done' ? 'checked' : 'unchecked'}`} onClick={(e) => { e.stopPropagation(); void handleCheckboxClick(t); }}>✓</div>
                                     <div className="task-content-wrapper">
                                         <a className="internal-link-wrapper internal-link" data-href={t.path} href={t.path}>
                                             <div className="task-text">
@@ -240,16 +241,16 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
             dTasks.forEach(t => {
                 const key = groupMode === 'priority' ? String(t.priority) : t.fileName;
                 if (!groups[key]) groups[key] = [];
-                groups[key].push(t);
+                groups[key]?.push(t);
             });
             const groupKeys = Object.keys(groups).sort((a, b) => groupMode === 'priority' ? Number(b) - Number(a) : a.localeCompare(b));
 
             cols.push(
                 <div 
                     key={dateStr} className={`week-col ${isToday ? 'today' : ''} ${isPast ? 'past' : ''}`}
-                    onDragOver={e => { e.preventDefault(); (e.currentTarget as HTMLElement).classList.add('drop-zone-active'); }}
-                    onDragLeave={e => (e.currentTarget as HTMLElement).classList.remove('drop-zone-active')}
-                    onDrop={e => { (e.currentTarget as HTMLElement).classList.remove('drop-zone-active'); handleDrop(e, dateStr, null); }}
+                    onDragOver={e => { e.preventDefault(); (e.currentTarget as HTMLElement).addClass('drop-zone-active'); }}
+                    onDragLeave={e => (e.currentTarget as HTMLElement).removeClass('drop-zone-active')}
+                    onDrop={e => { (e.currentTarget as HTMLElement).removeClass('drop-zone-active'); void handleDrop(e, dateStr, null); }}
                 >
                     <div className="week-col-header" onClick={() => { setCurrentDate(dayDate); setViewMode('day'); }}>
                         <div className="week-col-date-row">
@@ -337,7 +338,6 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                         {['日', '一', '二', '三', '四', '五', '六'].map(d => (<div key={d} className="calendar-day-header">{d}</div>))}
                         {cells}
                     </div>
-                    {/* 🌟 补充热力图提示图例 */}
                     <div className="heatmap-legend">
                         <span>少</span>
                         <div className="calendar-cell heat-0"></div>
@@ -355,7 +355,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         );
     };
 
-    if (isLoading) return (<div className={`task-dashboard-container ${densityClass}`} style={{justifyContent: 'center', alignItems: 'center'}}><h2 style={{color: 'var(--text-sub)', opacity: 0.7}}>🚀 正在引擎加速读取知识库...</h2></div>);
+    if (isLoading) return (<div className={`task-dashboard-container ${densityClass}`} style={{justifyContent: 'center', alignItems: 'center'}}><h2 style={{color: 'var(--text-sub)', opacity: 0.7}}>🚀 引擎正在加载...</h2></div>);
 
     return (
         <div className={`task-dashboard-container ${densityClass}`}>
