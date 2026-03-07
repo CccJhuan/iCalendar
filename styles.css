@@ -1,8 +1,192 @@
-/*
+/* --- 修复容器导致滚动冲突 --- */
+.icalendar-plugin-container {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    padding: 0 !important;
+}
 
-This CSS file will be included with your plugin, and
-available in the app when your plugin is enabled.
+.task-dashboard-container {
+    --ios-bg: var(--background-primary);
+    --ios-card-bg: var(--background-secondary);
+    --ios-border: rgba(128, 128, 128, 0.15);
+    --morandi-1: #6A8EAE; 
+    --morandi-1-bg: rgba(106, 142, 174, 0.15);
+    --morandi-2: #7E9B8D; 
+    --morandi-2-bg: rgba(126, 155, 141, 0.15);
+    --morandi-3: #A68A86; 
+    --morandi-3-bg: rgba(166, 138, 134, 0.15);
+    --priority-high: #D4A5A5;
+    --priority-med: #E3C099; 
+    --priority-low: #BCAAA4; 
+    --text-primary: var(--text-normal);
+    --text-sub: var(--text-muted);
+    
+    /* 🌟 重调热力图色值以获得极高辨识度 */
+    --heat-0: var(--background-primary);
+    --heat-1: rgba(106, 142, 174, 0.25);
+    --heat-2: rgba(106, 142, 174, 0.50);
+    --heat-3: rgba(106, 142, 174, 0.75);
+    --heat-4: rgba(106, 142, 174, 1.0);
+    
+    font-family: var(--font-interface);
+    padding: 24px; 
+    background: var(--ios-bg);
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    width: 100%;
+    height: 100%;
+    box-sizing: border-box;
+    overflow: hidden; 
+}
 
-If your plugin does not need CSS, delete this file.
+.fixed-top-area { flex-shrink: 0; display: flex; flex-direction: column; gap: 16px; border-bottom: 1px solid var(--ios-border); padding-bottom: 12px; }
+.dashboard-header { display: flex; justify-content: space-between; align-items: center; width: 100%; }
+.dashboard-title { font-weight: 800; font-size: 1.3em; color: var(--text-primary); }
+.header-controls { display: flex; gap: 8px; align-items: center; }
+.right-controls { display: flex; gap: 12px; align-items: center; }
+.view-switcher, .group-switcher, .header-controls { background: var(--background-modifier-form-field); border-radius: 6px; padding: 4px; display: flex; gap: 4px; }
+.view-btn, .nav-btn, .group-btn { border: none; background: transparent; padding: 4px 12px; border-radius: 4px; font-size: 0.9em; font-weight: 600; cursor: pointer; color: var(--text-sub); transition: all 0.2s; }
+.view-btn.active, .group-btn.active { background: var(--background-primary); color: var(--text-primary); font-weight: 800; box-shadow: 0 1px 4px rgba(0,0,0,0.1); }
 
-*/
+.priority-dock { display: flex; justify-content: center; align-items: center; gap: 12px; padding: 8px 16px; background: var(--ios-card-bg); border-radius: 10px; border: 1px dashed var(--ios-border); }
+.dock-label { font-size: 0.85em; font-weight: 600; color: var(--text-sub); }
+.dock-item { display: flex; align-items: center; gap: 6px; padding: 6px 14px; border-radius: 8px; font-size: 0.9em; font-weight: 600; background: var(--background-primary); border: 2px solid transparent; transition: all 0.2s cubic-bezier(0.25, 0.1, 0.25, 1); }
+.dock-item.drag-over { transform: scale(1.15) translateY(-4px); border-color: var(--morandi-1); box-shadow: 0 8px 16px rgba(0,0,0,0.1); background: var(--morandi-1-bg); }
+
+[draggable="true"] { cursor: grab; }
+[draggable="true"]:active { cursor: grabbing; }
+.dragging { opacity: 0.4; transform: scale(0.98); }
+.drop-zone-active { border-color: var(--morandi-1) !important; background: var(--morandi-1-bg) !important; }
+
+.view-content-area { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
+
+/* 日视图 */
+.day-view-scrollable { flex: 1; overflow-y: auto; overflow-x: hidden; padding-right: 8px; }
+.day-view-scrollable::-webkit-scrollbar { width: 8px; }
+.day-view-scrollable::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, 0.3); border-radius: 4px; }
+.file-groups-container { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; align-content: start; width: 100%; }
+.file-group-card { background: var(--ios-card-bg); border-radius: 12px; padding: 0 16px 16px 16px; border: 2px dashed transparent; display: flex; flex-direction: column; gap: 8px; transition: all 0.2s ease; position: relative;}
+.file-group-header { position: sticky; top: 0; z-index: 10; background: var(--ios-card-bg); font-weight: 800; font-size: 1.1em; color: var(--text-primary); padding: 16px 0 8px 0; border-bottom: 1px solid var(--ios-border); }
+
+/* 周视图与动态表情 */
+.weekly-insights { display: flex; flex-direction: column; gap: 8px; padding: 16px 20px; background: var(--ios-card-bg); border-radius: 10px; border: 1px solid var(--ios-border); flex-shrink: 0; }
+.insights-header { display: flex; justify-content: space-between; align-items: flex-end; }
+.insights-title { font-size: 1.1em; font-weight: bold; color: var(--text-sub); }
+.insights-stats { font-size: 2em; font-weight: 800; color: var(--text-primary); letter-spacing: -0.5px; line-height: 1; display: flex; align-items: baseline;}
+.insights-stats span { font-size: 0.5em; font-weight: normal; color: var(--text-sub); margin-left: 6px; }
+.insights-emoji { font-size: 0.8em !important; margin-left: 12px !important; filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1)); transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275); display: inline-block;}
+.insights-emoji:hover { transform: scale(1.3) rotate(10deg); }
+
+.progress-container { width: 100%; height: 8px; background: rgba(128,128,128,0.15); border-radius: 4px; overflow: hidden; margin-top: 6px; }
+.progress-fill { height: 100%; background: var(--morandi-1); border-radius: 4px; transition: width 0.5s cubic-bezier(0.4, 0, 0.2, 1); }
+.progress-fill.complete { background: var(--morandi-2); }
+
+.week-view-container { flex: 1; display: flex; flex-direction: column; overflow: hidden; gap: 12px; }
+.week-view { flex: 1; display: grid; grid-template-columns: repeat(7, minmax(240px, 1fr)); gap: 12px; overflow-x: auto; overflow-y: hidden; padding-bottom: 8px; }
+.week-view::-webkit-scrollbar { height: 8px; }
+.week-view::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, 0.3); border-radius: 4px; }
+.week-col { background: var(--ios-card-bg); border-radius: 10px; padding: 10px 10px 0 10px; border: 2px dashed transparent; display: flex; flex-direction: column; height: 100%; overflow: hidden; transition: all 0.2s ease; }
+.week-col.past { opacity: 0.6; background: transparent; border: 1px solid var(--ios-border); }
+.week-col.today { background: var(--background-primary); border: 2px solid var(--morandi-1); box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
+.week-col-header { flex-shrink: 0; display: flex; flex-direction: column; font-size: 0.95em; color: var(--text-primary); padding-bottom: 10px; border-bottom: 1px solid var(--ios-border); cursor: pointer; transition: color 0.2s;}
+.week-col-header:hover { color: var(--morandi-1); }
+.week-col-date-row { display: flex; justify-content: space-between; align-items: center; font-weight: 800; }
+.day-stats { font-size: 0.85em; color: var(--text-sub); font-weight: 600; }
+.today .week-col-header .week-col-date-row { color: var(--morandi-1); }
+.week-col-tasks { flex: 1; overflow-y: auto; overflow-x: hidden; padding-bottom: 10px; display: flex; flex-direction: column; gap: 8px; margin-top: 8px;}
+.week-col-tasks::-webkit-scrollbar { width: 4px; }
+.week-col-tasks::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, 0.2); border-radius: 4px; }
+.week-file-group { display: flex; flex-direction: column; gap: 6px; background: rgba(255,255,255,0.03); border-radius: 6px; padding: 4px 0px; }
+.week-file-header { font-size: 0.8em; color: var(--text-sub); font-weight: bold; padding-left: 4px; white-space: normal; word-break: break-word; line-height: 1.2; }
+
+/* 月视图与热力图增强 */
+.month-layout-wrapper { flex: 1; display: flex; gap: 20px; align-items: stretch; overflow: hidden; }
+.month-sidebar { flex: 0 0 320px; background: var(--ios-card-bg); padding: 16px; border-radius: 12px; border: 1px solid var(--ios-border); overflow-y: auto; display: flex; flex-direction: column;}
+.month-main-content { flex: 1; min-width: 320px; overflow-y: auto; padding-right: 8px; }
+.month-main-content::-webkit-scrollbar { width: 8px; }
+.month-main-content::-webkit-scrollbar-thumb { background: rgba(128, 128, 128, 0.3); border-radius: 4px; }
+
+.calendar-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 6px; width: 100%; position: relative; margin-bottom: auto;}
+.calendar-day-header { position: sticky; top: -16px; background: var(--ios-card-bg); z-index: 10; display: flex; align-items: center; justify-content: center; height: 30px; font-size: 0.85em; font-weight: 700; color: var(--text-sub); padding-top: 10px; }
+.calendar-cell { height: 46px; border-radius: 8px; background: var(--heat-0); cursor: pointer; display: flex; flex-direction: column; align-items: center; justify-content: center; position: relative; transition: all 0.15s; border: 1px solid var(--ios-border); }
+.calendar-cell:hover { transform: scale(1.08); border-color: var(--morandi-1); z-index: 2; }
+.calendar-cell.selected { border: 2px solid var(--morandi-1); }
+.heat-1 { background-color: var(--heat-1); border-color: transparent;}
+.heat-2 { background-color: var(--heat-2); border-color: transparent;}
+.heat-3 { background-color: var(--heat-3); color: var(--heat-text-light); border-color: transparent;}
+.heat-4 { background-color: var(--heat-4); color: var(--heat-text-light); border-color: transparent;}
+.day-number { font-size: 0.95em; font-weight: 600; z-index: 1; }
+.heat-3 .day-number, .heat-4 .day-number { color: white; }
+.task-count-badge { font-size: 0.7em; font-weight: 800; opacity: 0.9; line-height: 1; margin-top: 2px;}
+
+/* 🌟 热力图图例 */
+.heatmap-legend { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding-top: 20px; font-size: 0.8em; color: var(--text-sub); font-weight: 600;}
+.heatmap-legend .calendar-cell { width: 18px; height: 18px; border-radius: 4px; cursor: default; border: 1px solid var(--ios-border); }
+.heatmap-legend .calendar-cell:hover { transform: none; border-color: inherit; }
+
+/* 任务卡片基础样式 */
+.ios-task-item { display: flex; align-items: flex-start; padding: 6px 0; gap: 12px; border-bottom: 1px dashed var(--ios-border); transition: opacity 0.3s; }
+.ios-task-item:last-child { border-bottom: none; }
+.ios-checkbox { min-width: 20px; height: 20px; border-radius: 6px; border: 2px solid var(--text-sub); margin-top: 2px; display: grid; place-items: center; font-size: 12px; color: transparent; cursor: pointer; transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1); }
+.ios-checkbox:hover { border-color: var(--morandi-1); transform: scale(1.1); }
+.ios-checkbox.checked { background: var(--text-sub); border-color: var(--text-sub); color: var(--background-primary); }
+.task-content-wrapper { flex: 1; display: flex; flex-direction: column; gap: 4px; overflow: hidden; }
+.task-text { font-size: 1.05em; font-weight: 600; color: var(--text-primary); line-height: 1.4; transition: all 0.3s ease; }
+.checked .task-text { text-decoration: line-through; color: var(--text-muted); font-weight: normal; }
+
+.mini-task { padding: 10px 8px; border-radius: 6px; background: var(--background-primary); border-left: 4px solid; display: flex; flex-direction: column; gap: 6px; transition: all 0.2s cubic-bezier(0.25, 0.1, 0.25, 1); position: relative; }
+.mini-task:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.08); z-index: 2; }
+.mini-task.done { opacity: 0.5; filter: grayscale(1); border-left-color: var(--text-muted) !important; background: transparent;}
+.mini-task.done .mini-task-content { text-decoration: line-through; color: var(--text-muted); }
+.mini-task-content { font-size: 1.05em; font-weight: 600; line-height: 1.4; color: var(--text-primary); word-break: break-word; }
+
+.tag-container { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px;}
+.task-tag { font-size: 0.75em; padding: 2px 8px; border-radius: 6px; background: rgba(128, 128, 128, 0.1); color: var(--text-sub); line-height: 1.2; font-weight: 500;}
+.file-tag { background: rgba(106, 142, 174, 0.15) !important; color: var(--morandi-1) !important; border: 1px solid rgba(106, 142, 174, 0.3); font-weight: 700; }
+.internal-link-wrapper { text-decoration: none; color: inherit; display: block; }
+.internal-link-wrapper:hover { color: var(--morandi-1); }
+
+/* 颜色映射 */
+.accent-type-1 { border-left-color: var(--morandi-1); }
+.accent-type-2 { border-left-color: var(--morandi-2); }
+.accent-type-3 { border-left-color: var(--morandi-3); }
+.priority-level-5, .priority-level-4 { border-left-color: var(--priority-high); }
+.priority-level-3 { border-left-color: var(--priority-med); }
+.priority-level-1, .priority-level-0 { border-left-color: var(--priority-low); }
+.group-type-1 { border-top: 4px solid var(--morandi-1); }
+.group-type-2 { border-top: 4px solid var(--morandi-2); }
+.group-type-3 { border-top: 4px solid var(--morandi-3); }
+.prio-group-5, .prio-group-4 { border-top: 4px solid var(--priority-high); }
+.prio-group-3 { border-top: 4px solid var(--priority-med); }
+.prio-group-2 { border-top: 4px solid var(--morandi-1); }
+.prio-group-1, .prio-group-0 { border-top: 4px solid var(--priority-low); }
+
+/* =========================================
+   🌟 核心功能：紧凑模式 (Compact Density) 
+   ========================================= */
+.density-compact .mini-task {
+    padding: 6px 8px;
+    gap: 4px;
+}
+.density-compact .mini-task-content {
+    font-size: 0.95em;
+    line-height: 1.3;
+}
+.density-compact .task-tag {
+    font-size: 0.7em;
+    padding: 1px 6px;
+}
+.density-compact .week-col-tasks {
+    gap: 6px;
+}
+.density-compact .week-file-group {
+    gap: 4px;
+}
+.density-compact .ios-task-item {
+    padding: 4px 0;
+}
+.density-compact .task-text {
+    font-size: 0.95em;
+}
