@@ -8,6 +8,10 @@ import type ICalendarPlugin from './main';
 interface DashboardProps {
     plugin: ICalendarPlugin;
 }
+type DataviewMetadataCache = {
+    on(name: string, callback: (...args: unknown[]) => void): unknown;
+    offref(ref: unknown): void;
+};
 
 const PRIORITY_MAP: Record<number, { label: string, classId: number, icon: string }> = {
     5: { label: '最高', classId: 5, icon: '🔺' },
@@ -25,8 +29,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
     
     const [tasks, setTasks] = useState<TaskItem[]>([]);
     const [isLoading, setIsLoading] = useState(true);
-
     const densityClass = `density-${plugin.settings.taskDensity}`;
+
+    const [showCompleted, setShowCompleted] = useState(true);
+    const [filterEnabled, setFilterEnabled] = useState(false);
+    const [selectedTags, setSelectedTags] = useState<string[]>([]); 
+    const [filterType, setFilterType] = useState<'any' | 'none' | 'all'>('any');
+
 
     useEffect(() => {
         let isMounted = true;
@@ -67,12 +76,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
             const data = await plugin.getTasksFromCache(); // 从 Map 展平，O(n) 操作
             if (isMounted) setTasks(data);
         };
-
+        const cache = plugin.app.metadataCache as unknown as DataviewMetadataCache;
         // 🌟 增量监听：Dataview 告诉我们哪个文件变了
-        const eventRef = (plugin.app.metadataCache as any).on('dataview:metadata-change', (op: string, file: TFile) => {
+        const eventRef =cache.on('dataview:metadata-change', (op, file) => {
             const dv = plugin.getDataviewAPI();
             if (!dv) return;
-            
+            if (!(file instanceof TFile)) {
+                return;
+            }
             const page = dv.page(file.path);
             if (page) {
                 plugin.updateFileCache(page);
@@ -84,7 +95,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
 
         return () => {
             isMounted = false;
-            (plugin.app.metadataCache as any).offref(eventRef);
+            cache.offref(eventRef);
         };
     }, [plugin]);
 
@@ -95,6 +106,67 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
             return a.fileName.localeCompare(b.fileName);
         });
     }, [tasks]);
+    const allVisibleTasksTags = useMemo(() => {
+        const startOfView = currentDate.clone().startOf(viewMode);
+        const endOfView = currentDate.clone().endOf(viewMode);
+        
+        const currentViewTasks = sortedTasks.filter(t => 
+            t.date && window.moment(t.date).isBetween(startOfView, endOfView, 'day', '[]')
+        );
+        
+        const tagCountMap: Record<string, number> = {};
+        currentViewTasks.forEach(t => {
+            (t.tags || []).forEach(tag => {
+                tagCountMap[tag] = (tagCountMap[tag] || 0) + 1;
+            });
+        });
+        return Object.entries(tagCountMap).sort((a, b) => b[1] - a[1]); 
+    }, [sortedTasks, currentDate, viewMode]);
+
+    // --- 🌟 核心引擎：超級过滤管道仅用于 UI 列表渲染 ---
+    const memoizedFilteredTasks = useMemo(() => {
+        return sortedTasks.filter(t => {
+            // 1. 已完成任务过滤 (保持现有逻辑)
+            if (!showCompleted && t.type === 'done') return false;
+            
+            // 2. 🌟 标签筛选 (多选逻辑优化)
+            if (filterEnabled && selectedTags.length > 0) {
+                const taskTags = t.tags || [];
+                
+                if (filterType === 'any') {
+                    // has ANY of: 任务包含选中标签中的任意一个
+                    if (!selectedTags.some(tag => taskTags.includes(tag))) return false;
+                } else if (filterType === 'all') {
+                    // has ALL of (参考参考图B): 任务必须包含所有选中的标签
+                    if (!selectedTags.every(tag => taskTags.includes(tag))) return false;
+                } else if (filterType === 'none') {
+                    // has NONE of: 任务不能包含选中标签中的任何一个
+                    if (selectedTags.some(tag => taskTags.includes(tag))) return false;
+                }
+            }
+            return true;
+        });
+    }, [sortedTasks, showCompleted, filterEnabled, selectedTags, filterType]);
+
+
+    // 🌟 核心引擎 2：权重计算器抽离
+    // 传入任务数组，返回基于权重的完成率百分比
+    const calculateWeightedProgress = (targetTasks: TaskItem[]) => {
+        const totalWeight = targetTasks.reduce((acc, t) => acc + (plugin.settings.priorityWeights[t.priority] ?? 1), 0);
+        if (totalWeight === 0) return { totalWeight, doneWeight: 0, percent: 0, doneCount: 0, totalCount: 0 };
+        
+        const doneTasks = targetTasks.filter(t => t.type === 'done');
+        const doneWeight = doneTasks.reduce((acc, t) => acc + (plugin.settings.priorityWeights[t.priority] ?? 1), 0);
+        
+        return {
+            totalWeight,
+            doneWeight,
+            percent: Math.round((doneWeight / totalWeight) * 100),
+            doneCount: doneTasks.length,
+            totalCount: targetTasks.length
+        };
+    };
+
 
     const handleDragStart = (e: React.DragEvent<HTMLDivElement>, task: TaskItem) => {
         e.dataTransfer.setData('application/json', JSON.stringify(task));
@@ -155,10 +227,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
     // 🌟 核心：显示带撤销按钮的通知
     const showUndoNotice = (message: string, originalState: TaskItem) => {
         const notice = new Notice("", 5000); // 5秒消失
-        const container = notice.noticeEl;
+        const container = notice.messageEl;
         container.empty();
         
-        const span = container.createEl('span', { text: `${message} ` });
+        container.createEl('span', { text: `${message} ` });
         const undoBtn = container.createEl('a', { 
             text: "撤销", 
             cls: "icalendar-undo-link" // 可以在 CSS 中定义样式
@@ -218,7 +290,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
     );
 
     const renderDailyList = (dateStr: string) => {
-        const dayTasks = sortedTasks.filter(t => t.date === dateStr);
+        const dayTasks = memoizedFilteredTasks.filter(t => t.date === dateStr);
         if (dayTasks.length === 0) return <div style={{textAlign: 'center', color: 'var(--text-sub)', padding: '40px', width: '100%'}}>☕️ 此日无计划任务</div>;
 
         // --- 1. 重新定义分组逻辑 ---
@@ -239,9 +311,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         // --- 2. 重新定义排序逻辑 ---
         const groupKeys = Object.keys(groups).sort((a, b) => {
             if (groupMode === 'priority') {
-                if (a === 'done') return 1;  // 'done' 组永远排在最后
+                if (a === 'done') return 1;
                 if (b === 'done') return -1;
-                return Number(b) - Number(a); // 5 -> 0 降序
+                return Number(b) - Number(a);
             }
             return a.localeCompare(b);
         });
@@ -253,39 +325,58 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                     const firstTask = groupTasks[0];
                     if (!firstTask) return null;
 
-                    // --- 3. 动态渲染样式与标题 (即你询问的部分) ---
+                    // 1. 动态样式与头部文本计算
                     const isDoneGroup = key === 'done';
                     const cardClass = groupMode === 'priority' 
                         ? (isDoneGroup ? 'prio-group-done' : `prio-group-${key}`) 
                         : `group-type-${firstTask.colorIndex}`;
-
+                    
                     const headerText = groupMode === 'priority' 
                         ? (isDoneGroup ? '✅ 已完成' : (PRIORITY_MAP[Number(key)]?.label || key)) 
                         : key;
 
                     return (
                         <div 
-                            key={key} className={`file-group-card ${cardClass}`}
+                            key={key} 
+                            className={`file-group-card ${cardClass}`}
                             onDragOver={e => { e.preventDefault(); (e.currentTarget as HTMLElement).addClass('drop-zone-active'); }}
                             onDragLeave={e => (e.currentTarget as HTMLElement).removeClass('drop-zone-active')}
                             onDrop={e => { 
                                 (e.currentTarget as HTMLElement).removeClass('drop-zone-active'); 
-                                // 🌟 这里传入 isDoneGroup 判断
-                                void handleDrop(e, null, isDoneGroup ? 'done' : Number(key)); 
+                                // 拖拽放下时，传递当前日期和新的优先级（或 'done' 状态）
+                                void handleDrop(e, dateStr, isDoneGroup ? 'done' : (groupMode === 'priority' ? Number(key) : null)); 
                             }}
                         >
                             <div className="file-group-header">{headerText}</div>
+                            
+                            {/* 2. 遍历渲染该分组下的每一个具体任务 */}
                             {groupTasks.map((t, idx) => (
-                                <div key={`${t.path}-${t.line}-${idx}`} className={`ios-task-item ${t.type === 'done' ? 'checked' : ''}`} draggable onDragStart={e => handleDragStart(e, t)} onDragEnd={handleDragEnd}>
-                                    <div className={`ios-checkbox ${t.type === 'done' ? 'checked' : 'unchecked'}`} onClick={(e) => { e.stopPropagation(); void handleCheckboxClick(t); }}>✓</div>
+                                <div 
+                                    key={`${t.path}-${t.line}-${idx}`} 
+                                    className={`ios-task-item ${t.type === 'done' ? 'checked' : ''}`} 
+                                    draggable 
+                                    onDragStart={e => handleDragStart(e, t)} 
+                                    onDragEnd={handleDragEnd}
+                                >
+                                    {/* 🌟 独立的复选框点击热区 */}
+                                    <div 
+                                        className={`ios-checkbox ${t.type === 'done' ? 'checked' : 'unchecked'}`} 
+                                        onClick={(e) => { e.stopPropagation(); void handleCheckboxClick(t); }}
+                                    >
+                                        ✓
+                                    </div>
+                                    
                                     <div className="task-content-wrapper">
+                                        {/* 任务文本与链接 */}
                                         <a className="internal-link-wrapper internal-link" data-href={t.path} href={t.path}>
-                                            <div className="task-text">
-                                                {/* 🌟 在已完成组里，就不需要再显示优先级图标了，保持简洁 */}
+                                            <div className="task-text" style={{textDecoration: t.type === 'done' ? 'line-through' : 'none'}}>
+                                                {/* 如果不是优先模式或已完成组，显示优先级图标 */}
                                                 {!isDoneGroup && groupMode !== 'priority' && PRIORITY_MAP[t.priority]?.icon && `${PRIORITY_MAP[t.priority]?.icon} `}
                                                 {t.content}
                                             </div>
                                         </a>
+                                        
+                                        {/* 任务标签信息 */}
                                         <div className="tag-container">
                                             {(groupMode === 'priority' || isDoneGroup) && <div className="task-tag file-tag">{t.fileName}</div>}
                                             {t.tags.map((tag, i) => <div key={i} className="task-tag">{tag}</div>)}
@@ -304,10 +395,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         const startOfWeek = currentDate.clone().startOf('week');
         const endOfWeek = currentDate.clone().endOf('week');
         
-        const weekTasks = tasks.filter(t => t.date && window.moment(t.date).isBetween(startOfWeek, endOfWeek, 'day', '[]'));
-        const total = weekTasks.length;
-        const done = weekTasks.filter(t => t.type === 'done').length;
-        const percent = total === 0 ? 0 : Math.round((done / total) * 100);
+        const weekTasks = sortedTasks.filter(t => t.date && window.moment(t.date).isBetween(startOfWeek, endOfWeek, 'day', '[]'));
+        const { percent, doneCount, totalCount, doneWeight, totalWeight } = calculateWeightedProgress(weekTasks);
         const emoji = getPerformanceEmoji(percent);
 
         return (
@@ -315,8 +404,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                 <div className="insights-header">
                     <div className="insights-title">📊 本周整体效能追踪</div>
                     <div className="insights-stats">
-                        {done} / {total} <span>({percent}%)</span> 
-                        <span className="insights-emoji" title="效能状态">{emoji}</span>
+                        {/* 视觉上展示进度百分比，附带权重分数提示 */}
+                        {percent}% <span title={`权重得分: ${doneWeight} / ${totalWeight}`}>({doneCount}/{totalCount}件)</span> 
+                        <span className="insights-emoji">{emoji}</span>
                     </div>
                 </div>
                 <div className="progress-container">
@@ -335,17 +425,21 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
             const isToday = dateStr === window.moment().format('YYYY-MM-DD');
             const isPast = dayDate.isBefore(window.moment(), 'day');
 
-            const dTasks = sortedTasks.filter(t => t.date === dateStr);
-            const dTotal = dTasks.length;
-            const dDone = dTasks.filter(t => t.type === 'done').length;
-            const dPercent = dTotal === 0 ? 0 : Math.round((dDone / dTotal) * 100);
+            // 🌟 核心分流 1：KPI 数据流（不受标签筛选影响，使用 sortedTasks）
+            const dTasksKPI = sortedTasks.filter(t => t.date === dateStr);
+            const { percent: dPercent, doneCount: dDone, totalCount: dTotal } = calculateWeightedProgress(dTasksKPI);
+
+            // 🌟 核心分流 2：UI 渲染流（受标签筛选影响，使用 memoizedFilteredTasks）
+            const dTasksFiltered = memoizedFilteredTasks.filter(t => t.date === dateStr);
 
             const groups: Record<string, TaskItem[]> = {};
-            dTasks.forEach(t => {
+            dTasksFiltered.forEach(t => {
                 const key = (groupMode === 'priority' && t.type === 'done') ? 'done' : (groupMode === 'priority' ? String(t.priority) : t.fileName);
                 if (!groups[key]) groups[key] = [];
                 groups[key]?.push(t);
             });
+
+            // 🌟 确保 groupKeys 存在
             const groupKeys = Object.keys(groups).sort((a, b) => {
                 if (groupMode === 'priority') {
                     if (a === 'done') return 1;
@@ -364,6 +458,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                     <div className="week-col-header" onClick={() => { setCurrentDate(dayDate); setViewMode('day'); }}>
                         <div className="week-col-date-row">
                             <span>{dayDate.format('M.D ddd')}</span>
+                            {/* 进度条使用 KPI 数据 */}
                             {dTotal > 0 && <span className="day-stats">{dDone}/{dTotal}</span>}
                         </div>
                         {dTotal > 0 && (
@@ -374,24 +469,38 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                     </div>
                     
                     <div className="week-col-tasks">
-                        {dTasks.length === 0 && <div style={{opacity: 0.3, textAlign:'center', marginTop:'10px', fontSize:'0.8em'}}>无任务</div>}
+                        {dTasksFiltered.length === 0 && <div style={{opacity: 0.3, textAlign:'center', marginTop:'10px', fontSize:'0.8em'}}>无任务</div>}
+                        
+                        {/* 🌟 遍历 groupKeys 渲染 UI 列表 */}
                         {groupKeys.map(key => {
                             const groupTasks = groups[key] || [];
-                            const headerText = groupMode === 'priority' ? PRIORITY_MAP[Number(key)]?.label : key;
+                            const isDoneGroup = key === 'done';
+                            const headerText = groupMode === 'priority' ? (isDoneGroup ? '✅ 已完成' : PRIORITY_MAP[Number(key)]?.label) : key;
+                            
                             return (
-                                <div key={key} className="week-file-group">
+                                <div key={key} className={`week-file-group ${isDoneGroup ? 'prio-group-done' : ''}`}>
                                     <div className="week-file-header">{headerText}</div>
                                     {groupTasks.map((t, idx) => {
-                                        const cardBorderClass = groupMode === 'priority' ? `priority-level-${t.priority}` : `accent-type-${t.colorIndex}`;
+                                        const cardBorderClass = groupMode === 'priority' 
+                                            ? (isDoneGroup ? 'prio-group-done' : `priority-level-${t.priority}`) 
+                                            : `accent-type-${t.colorIndex}`;
+                                        
                                         return (
                                             <div key={`${t.path}-${t.line}-${idx}`} className={`mini-task ${t.type} ${cardBorderClass}`} draggable onDragStart={e => handleDragStart(e, t)} onDragEnd={handleDragEnd}>
+                                                {/* 🌟 这里的点击事件触发 handleCheckboxClick */}
+                                                <div 
+                                                    style={{position: 'absolute', left: '-6px', top: '8px', cursor: 'pointer', zIndex: 10}}
+                                                    onClick={(e) => { e.stopPropagation(); void handleCheckboxClick(t); }}
+                                                >
+                                                    {/* 如果周视图需要复选框可以放这里，如果不需要，通过双击或者右键调用，你原本的代码用的是 a 标签跳转，未提供显式 checkbox，如果你希望点击任务本身完成，可以绑定在 mini-task-content 上 */}
+                                                </div>
                                                 <a className="internal-link-wrapper internal-link" data-href={t.path} href={t.path}>
                                                     <div className="mini-task-content" style={{textDecoration: t.type === 'done' ? 'line-through' : 'none'}}>
-                                                        {groupMode !== 'priority' && PRIORITY_MAP[t.priority]?.icon && `${PRIORITY_MAP[t.priority]?.icon} `}{t.content}
+                                                        {!isDoneGroup && groupMode !== 'priority' && PRIORITY_MAP[t.priority]?.icon && `${PRIORITY_MAP[t.priority]?.icon} `}{t.content}
                                                     </div>
                                                 </a>
                                                 <div className="tag-container" style={{marginTop: '2px'}}>
-                                                    {groupMode === 'priority' && <div className="task-tag file-tag">{t.fileName}</div>}
+                                                    {(groupMode === 'priority' || isDoneGroup) && <div className="task-tag file-tag">{t.fileName}</div>}
                                                     {t.tags.map((tag, i) => <div key={i} className="task-tag">{tag}</div>)}
                                                 </div>
                                             </div>
@@ -418,28 +527,67 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         const daysInMonth = currentDate.daysInMonth();
         const startDay = startOfMonth.day(); 
 
+        // 1. 获取该月内所有任务的数据池（注意使用 sortedTasks 而不是 filteredTasks）
+        const monthTasks = sortedTasks.filter(t => t.date && window.moment(t.date).isSame(currentDate, 'month'));
+        
+        // 2. 计算该月内“每日完成权重得分”的数组，用于寻找当月峰值
+        const dailyWeights = Array.from({length: daysInMonth}, (_, i) => {
+            const dateStr = startOfMonth.clone().add(i, 'days').format('YYYY-MM-DD');
+            const dTasks = monthTasks.filter(t => t.date === dateStr);
+            return dTasks.filter(t => t.type === 'done').reduce((acc, t) => acc + (plugin.settings.priorityWeights[t.priority] ?? 1), 0);
+        });
+
+        // 3. 确立该月的最高得分（封顶值），最少为 1 以防除以 0
+        const maxDailyWeight = dailyWeights.length > 0 ? Math.max(...dailyWeights, 1) : 1;
+
         const cells = [];
+        // 填充月初空白格
         for (let i = 0; i < startDay; i++) cells.push(<div key={`spacer-${i}`} className="calendar-cell spacer" />);
 
+        // 4. 生成包含动态色彩的真实日期格
         for (let day = 1; day <= daysInMonth; day++) {
             const dateStr = currentDate.clone().date(day).format('YYYY-MM-DD');
-            const dayTasks = sortedTasks.filter(t => t.date === dateStr);
+            // 注意这里渲染详情也要使用未被标签过滤的 monthTasks，如果你希望月视图点开的右侧受标签影响，这里可以换成 memoizedFilteredTasks
+            const dayTasks = monthTasks.filter(t => t.date === dateStr); 
             const taskCount = dayTasks.length;
             
-            let heat = 0;
-            if (taskCount > 0) heat = 1;
-            if (taskCount > 2) heat = 2;
-            if (taskCount > 4) heat = 3;
-            if (taskCount > 7) heat = 4;
+            // 计算当日得分
+            const doneWeight = dayTasks.filter(t => t.type === 'done').reduce((acc, t) => acc + (plugin.settings.priorityWeights[t.priority] ?? 1), 0);
+            
+            // 归一化得分 (0.0 到 1.0)
+            const normalizedWeight = Math.min(1, doneWeight / maxDailyWeight);
+            
+            // 计算动态背景色：使用你的主色调 --morandi-1 (RGB: 106, 142, 174)，根据权重调节透明度
+            let cellStyle: React.CSSProperties = {};
+            let isDarkBg = false;
+            
+            if (doneWeight > 0) {
+                const alpha = Math.max(0.15, normalizedWeight); // 即使完成极少，也给个底色 0.15
+                cellStyle.backgroundColor = `rgba(106, 142, 174, ${alpha})`;
+                cellStyle.borderColor = 'transparent'; // 覆盖原有的灰边框
+                
+                // 如果颜色太深，文字变成白色保证可读性
+                if (alpha > 0.6) {
+                    cellStyle.color = 'white';
+                    isDarkBg = true;
+                }
+            }
 
             cells.push(
-                <div key={dateStr} className={`calendar-cell heat-${heat} ${dateStr === currentDate.format('YYYY-MM-DD') ? 'selected' : ''}`} onClick={() => setCurrentDate(window.moment(dateStr))}>
-                    <div className="day-number">{day}</div>
-                    {taskCount > 0 && <div className="task-count-badge">{taskCount}</div>}
+                <div 
+                    key={dateStr} 
+                    className={`calendar-cell ${dateStr === currentDate.format('YYYY-MM-DD') ? 'selected' : ''}`} 
+                    style={cellStyle}
+                    title={`${dateStr}: 效能得分 ${doneWeight} / 共 ${taskCount} 件`}
+                    onClick={() => setCurrentDate(window.moment(dateStr))}
+                >
+                    <div className="day-number" style={isDarkBg ? { color: 'white' } : {}}>{day}</div>
+                    {taskCount > 0 && <div className="task-count-badge" style={isDarkBg ? { color: 'white', opacity: 1 } : {}}>{taskCount}</div>}
                 </div>
             );
         }
 
+        // 🌟 5. 完全保留你原有的返回值结构，仅更新图例
         return (
             <div className="month-layout-wrapper">
                 <div className="month-sidebar">
@@ -447,17 +595,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                         {['日', '一', '二', '三', '四', '五', '六'].map(d => (<div key={d} className="calendar-day-header">{d}</div>))}
                         {cells}
                     </div>
+                    {/* 更新底部图例以匹配新的渐变色体系 */}
                     <div className="heatmap-legend">
                         <span>少</span>
-                        <div className="calendar-cell heat-0"></div>
-                        <div className="calendar-cell heat-1"></div>
-                        <div className="calendar-cell heat-2"></div>
-                        <div className="calendar-cell heat-3"></div>
-                        <div className="calendar-cell heat-4"></div>
+                        <div className="calendar-cell" style={{backgroundColor: 'rgba(106, 142, 174, 0.15)', borderColor: 'transparent'}}></div>
+                        <div className="calendar-cell" style={{backgroundColor: 'rgba(106, 142, 174, 0.4)', borderColor: 'transparent'}}></div>
+                        <div className="calendar-cell" style={{backgroundColor: 'rgba(106, 142, 174, 0.7)', borderColor: 'transparent'}}></div>
+                        <div className="calendar-cell" style={{backgroundColor: 'rgba(106, 142, 174, 1.0)', borderColor: 'transparent'}}></div>
                         <span>多</span>
                     </div>
                 </div>
                 <div className="month-main-content">
+                    {/* 右侧详情列表渲染 */}
                     {renderDailyList(currentDate.format('YYYY-MM-DD'))}
                 </div>
             </div>
@@ -466,31 +615,23 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
 
     if (isLoading) {
         return (
-            <div 
-                className={`task-dashboard-container ${densityClass}`} 
-                style={{ 
-                    display: 'flex', 
-                    justifyContent: 'center', 
-                    alignItems: 'center',
-                    width: '100%',
-                    height: '100%'
-                }}
-            >
+            <div className={`task-dashboard-container ${densityClass}`} style={{ display: 'flex', justifyContent: 'center', alignItems: 'center', width: '100%', height: '100%' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-                    {/* 🌟 核心修复：显式声明 textAlign 覆盖 Obsidian 默认设定，取消默认 margin */}
-                    <h2 style={{ color: 'var(--text-sub)', opacity: 0.7, margin: 0, textAlign: 'center' }}>
-                        🚀 引擎正在加载...
-                    </h2>
-                    <div style={{ marginTop: '12px', color: 'var(--text-muted)', fontSize: '0.85em' }}>
-                        正在同步本地数据图谱
-                    </div>
+                    <h2 style={{ color: 'var(--text-sub)', opacity: 0.7, margin: 0, textAlign: 'center' }}>🚀 引擎正在加载...</h2>
+                    <div style={{ marginTop: '12px', color: 'var(--text-muted)', fontSize: '0.85em' }}>正在同步本地数据图谱</div>
                 </div>
             </div>
         );
     }
+
+    // 🌟 这是整个看板的全局 UI 框架
     return (
         <div className={`task-dashboard-container ${densityClass}`}>
+            
+            {/* === 1. 顶部固定控制区 === */}
             <div className="fixed-top-area">
+                
+                {/* 1.1 顶层导航 Header */}
                 <div className="dashboard-header">
                     <div className="header-controls">
                         <button className="nav-btn" onClick={() => setCurrentDate(prev => prev.clone().subtract(1, viewMode === 'month' ? 'month' : (viewMode === 'week' ? 'week' : 'day')))}>❮</button>
@@ -500,7 +641,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                             {viewMode === 'month' ? currentDate.format('YYYY.MM') : (viewMode === 'week' ? `${currentDate.clone().startOf('week').format('MM.DD')} - ${currentDate.clone().endOf('week').format('MM.DD')}` : currentDate.format('MM.DD dddd'))}
                         </div>
                     </div>
+                    
                     <div className="right-controls">
+                        {/* 筛选与显示控制 */}
+                        <div className="header-controls" style={{marginRight: '8px'}}>
+                            <button className={`nav-btn ${!showCompleted ? 'active' : ''}`} onClick={() => setShowCompleted(!showCompleted)}>
+                                {showCompleted ? '👁️ 隐已完成' : '🙈 显已完成'}
+                            </button>
+                            <button className={`nav-btn ${filterEnabled ? 'active' : ''}`} onClick={() => setFilterEnabled(!filterEnabled)}>
+                                {filterEnabled ? '👁️ 正在筛选标签' : '🙈 开启标签筛选'}
+                            </button>
+                        </div>
+
+                        {/* 分组与视图切换 */}
                         {viewMode !== 'month' && (
                             <div className="group-switcher">
                                 <button className={`group-btn ${groupMode === 'file' ? 'active' : ''}`} onClick={() => setGroupMode('file')}>📁 项目</button>
@@ -514,19 +667,75 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                         </div>
                     </div>
                 </div>
+
+                {/* 1.2 标签筛选展开面板 (Filter Panel) */}
+                {filterEnabled && (
+                    <div className="icalendar-filter-panel" style={{ padding: '12px', borderRadius: '8px', background: 'rgba(0,0,0,0.05)', border: '1px solid var(--ios-border)', marginTop: '8px' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+                            <div style={{ fontSize: '0.9em', fontWeight: 'bold', color: 'var(--text-primary)' }}>标签筛选 (当前视图)</div>
+                            
+                            <div style={{ display: 'flex', gap: '8px', alignItems: 'center', fontSize: '0.8em' }}>
+                                <select 
+                                    value={filterType} 
+                                    onChange={e => setFilterType(e.target.value as 'any' | 'none' | 'all')}
+                                    style={{ background: 'var(--background-primary)', border: '1px solid var(--ios-border)', borderRadius: '4px', padding: '2px 6px', color: 'var(--text-normal)' }}
+                                >
+                                    <option value="any">包含任意一个</option>
+                                    <option value="all">必须包含所有</option>
+                                    <option value="none">排除选中标签</option>
+                                </select>
+                                {selectedTags.length > 0 && <button className="icalendar-link-btn" onClick={() => setSelectedTags([])}>清除 ({selectedTags.length})</button>}
+                            </div>
+                        </div>
+
+                        <div className="icalendar-tag-cloud" style={{ display: 'flex', flexWrap: 'wrap', gap: '8px', maxHeight: '120px', overflowY: 'auto' }}>
+                            {allVisibleTasksTags.length === 0 && <div style={{ opacity: 0.5, fontSize: '0.9em', padding: '4px' }}>当前视图无标签。</div>}
+                            {allVisibleTasksTags.map(([tag, count]) => {
+                                const isSelected = selectedTags.includes(tag);
+                                return (
+                                    <div 
+                                        key={tag} 
+                                        className={`icalendar-tag-bubble ${isSelected ? 'active' : ''}`}
+                                        onClick={() => setSelectedTags(prev => isSelected ? prev.filter(t => t !== tag) : [...prev, tag])}
+                                        style={{
+                                            cursor: 'pointer', padding: '4px 10px',
+                                            background: isSelected ? 'var(--text-accent)' : 'var(--background-modifier-form-field)',
+                                            color: isSelected ? 'white' : 'var(--text-sub)',
+                                            borderRadius: '16px', fontSize: '0.85em', display: 'flex', alignItems: 'center', gap: '4px',
+                                            border: isSelected ? 'none' : '1px solid transparent'
+                                        }}
+                                    >
+                                        {isSelected && <span style={{marginRight: '2px'}}>✅</span>}
+                                        {tag} <span style={{ opacity: 0.6, fontSize: '0.9em' }}>({count})</span>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                )}
+
+                {/* 1.3 拖拽 Dock */}
                 {viewMode !== 'month' && renderDock()}
+                
             </div>
 
+            {/* === 2. 下方滚动数据视图区 === */}
             <div className="view-content-area">
                 {viewMode === 'day' && (
                     <div className="day-view-scrollable">
                         <div style={{ fontSize: '1.4em', fontWeight: 800, marginBottom: '16px', paddingLeft: '4px', color: 'var(--text-primary)' }}>{currentDate.format('MM.DD dddd')}</div>
+                        {/* 🌟 日视图内容在这里被调用 */}
                         {renderDailyList(currentDate.format('YYYY-MM-DD'))}
                     </div>
                 )}
+                
+                {/* 🌟 周视图内容被调用 */}
                 {viewMode === 'week' && renderWeekCols()}
+                
+                {/* 🌟 月视图内容被调用 */}
                 {viewMode === 'month' && renderMonthView()}
             </div>
+            
         </div>
     );
 };

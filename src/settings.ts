@@ -6,12 +6,14 @@ export interface ICalendarSettings {
     defaultView: 'month' | 'week' | 'day';
     defaultGroup: 'file' | 'priority';
     taskDensity: 'standard' | 'compact';
+    priorityWeights: Record<number, number>;
 }
 
 export const DEFAULT_SETTINGS: ICalendarSettings = {
     defaultView: 'week',
     defaultGroup: 'priority',
-    taskDensity: 'standard'
+    taskDensity: 'standard',
+    priorityWeights: { 5: 1, 4: 1, 3: 1, 2: 1, 1: 1, 0: 1 }
 }
 
 export class ICalendarSettingTab extends PluginSettingTab {
@@ -68,5 +70,24 @@ export class ICalendarSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 })
             );
+        
+            new Setting(containerEl).setName("效能权重配置").setHeading();
+            const prioLabels: Record<number, string> = { 5: '最高优先级 (🔺)', 4: '高优先级 (⏫)', 3: '中优先级 (🔼)', 2: '普通优先级', 1: '低优先级 (🔽)', 0: '最低优先级 (⏬)' };
+            
+            [5, 4, 3, 2, 1, 0].forEach(level => {
+                new Setting(containerEl)
+                    .setName(prioLabels[level] ?? '未知优先级')
+                    .setDesc(`计算进度条时，该优先级任务代表的权重分值`)
+                    .addText(text => text
+                        .setValue(String(this.plugin.settings.priorityWeights[level] ?? 1))
+                        .onChange(async (value) => {
+                            const num = parseFloat(value);
+                            if (!isNaN(num) && num > 0) {
+                                this.plugin.settings.priorityWeights[level] = num;
+                                await this.plugin.saveSettings();
+                            }
+                        })
+                    );
+            });
     }
 }
