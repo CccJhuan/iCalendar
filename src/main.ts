@@ -364,22 +364,30 @@ export default class ICalendarPlugin extends Plugin {
         let lineStr = lines[task.line];
         if (lineStr === undefined) return;
 
+        // 🌟 1. 捕获并剥离行尾的块引用哈希
+        const blockRefRegex = /(\s+\^[a-zA-Z0-9-]+)\s*$/;
+        const blockRefMatch = lineStr.match(blockRefRegex);
+        const blockRef = blockRefMatch ? blockRefMatch[1] : '';
+        if (blockRef) {
+            lineStr = lineStr.replace(blockRefRegex, '');
+        }
+
         let newTaskStr: string | null = null;
         
         if (task.type === 'todo' && lineStr.includes('🔁')) {
             const recurrenceMatch = lineStr.match(/🔁\s*every\s+(\d+)?\s*(day|week|month|year)s?/i);
-            
             if (recurrenceMatch) {
                 const amountStr = recurrenceMatch[1] || '1';
                 const amount = parseInt(amountStr, 10);
                 const unitStr = (recurrenceMatch[2] || 'day').toLowerCase();
                 
-                // 🌟 核心修复 2：使用字符串字面量联合类型替代 any
                 let unit: 'day' | 'week' | 'month' | 'year' = 'day';
                 if (unitStr === 'week') unit = 'week';
                 if (unitStr === 'month') unit = 'month';
                 if (unitStr === 'year') unit = 'year';
 
+                // 🌟 注意：这里 newTaskStr 是基于已经去除了 blockRef 的 lineStr 生成的
+                // 这完美避免了新周期任务与老任务产生 ID 冲突
                 newTaskStr = lineStr; 
                 
                 const dateRegex = /(📅|⏳|🛫)\s*(\d{4}-\d{2}-\d{2})/gu;
@@ -395,6 +403,7 @@ export default class ICalendarPlugin extends Plugin {
             }
         }
 
+        // 修改当前行的完成状态
         if (task.type === 'todo') { 
             lineStr = lineStr.replace(/-\s\[\s\]/, '- [x]');
             if (!lineStr.match(/✅\s*\d{4}-\d{2}-\d{2}/u)) {
@@ -405,7 +414,8 @@ export default class ICalendarPlugin extends Plugin {
             lineStr = lineStr.replace(/\s*✅\s*\d{4}-\d{2}-\d{2}/u, '');
         }
 
-        lines[task.line] = lineStr;
+        // 🌟 2. 将块引用拼回当前已被修改完毕的任务行末尾
+        lines[task.line] = lineStr + blockRef;
 
         if (newTaskStr) {
             lines.splice(task.line + 1, 0, newTaskStr);
@@ -415,9 +425,7 @@ export default class ICalendarPlugin extends Plugin {
     }
 
     async updateTaskMetadata(task: TaskItem, newDateStr: string | null, newPriority: number | string | null): Promise<void> {
-        // 如果优先级是字符串 'done'，则此处不处理优先级逻辑，由 toggleTask 处理
         const finalPriority = typeof newPriority === 'number' ? newPriority : null;
-        
         const file = this.app.vault.getAbstractFileByPath(task.path);
         if (!(file instanceof TFile)) return;
 
@@ -426,6 +434,15 @@ export default class ICalendarPlugin extends Plugin {
         let lineStr = lines[task.line];
         if (lineStr === undefined) return;
 
+        // 🌟 1. 捕获并剥离行尾的块引用哈希 (形如 ^1a2b3c)
+        const blockRefRegex = /(\s+\^[a-zA-Z0-9-]+)\s*$/;
+        const blockRefMatch = lineStr.match(blockRefRegex);
+        const blockRef = blockRefMatch ? blockRefMatch[1] : '';
+        if (blockRef) {
+            lineStr = lineStr.replace(blockRefRegex, ''); // 暂时移除
+        }
+
+        // --- 以下保持原有的日期和优先级修改逻辑 ---
         if (newDateStr) {
             const dateRegex = /((?:📅|⏳|🛫)\s*)\d{4}-\d{2}-\d{2}/u;
             if (dateRegex.test(lineStr)) {
@@ -447,8 +464,10 @@ export default class ICalendarPlugin extends Plugin {
                 lineStr += ` ${newIcon}`;
             }
         }
+        // --- 原有逻辑结束 ---
 
-        lines[task.line] = lineStr;
+        // 🌟 2. 将之前保存的块引用重新拼接回绝对末尾
+        lines[task.line] = lineStr + blockRef;
         await this.app.vault.modify(file, lines.join('\n'));
     }
 
