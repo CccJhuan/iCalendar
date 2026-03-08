@@ -1,5 +1,5 @@
 /* eslint-disable obsidianmd/ui/sentence-case */
-import { Plugin, ItemView, WorkspaceLeaf, TFile } from 'obsidian';
+import { Plugin, ItemView, WorkspaceLeaf, TFile, Notice } from 'obsidian';
 import { createRoot, Root } from 'react-dom/client';
 import * as React from 'react';
 import { ICalendarSettings, DEFAULT_SETTINGS, ICalendarSettingTab } from './settings';
@@ -46,6 +46,19 @@ interface DataviewPage {
         tasks?: DataviewTask[];
         day?: {
             toISODate: () => string;
+        };
+    };
+}
+interface ObsidianTasksApiV1 {
+    executeToggleCommand(file: TFile, lineNumber: number): Promise<void>;
+}
+interface ObsidianAppWithPlugins {
+    plugins: {
+        plugins: {
+            'obsidian-tasks-plugin'?: {
+                apiV1?: ObsidianTasksApiV1;
+            };
+            [key: string]: unknown;
         };
     };
 }
@@ -333,21 +346,71 @@ export default class ICalendarPlugin extends Plugin {
         const file = this.app.vault.getAbstractFileByPath(task.path);
         if (!(file instanceof TFile)) return;
 
+        // 🌟 核心修复 1：使用双重断言 (unknown -> 具体接口) 替代 any，满足严格安全检查
+        const appWithPlugins = this.app as unknown as ObsidianAppWithPlugins;
+        const tasksPlugin = appWithPlugins.plugins.plugins['obsidian-tasks-plugin'];
+        
+        if (tasksPlugin && tasksPlugin.apiV1 && typeof tasksPlugin.apiV1.executeToggleCommand === 'function') {
+            try {
+                await tasksPlugin.apiV1.executeToggleCommand(file, task.line);
+                return; 
+            } catch (e) {
+                console.warn("调用 Tasks 插件 API 失败，降级为内置处理方案", e);
+            }
+        }
+
         const content = await this.app.vault.read(file);
         const lines = content.split('\n');
         let lineStr = lines[task.line];
         if (lineStr === undefined) return;
 
-        if (task.type === 'todo') {
+        let newTaskStr: string | null = null;
+        
+        if (task.type === 'todo' && lineStr.includes('🔁')) {
+            const recurrenceMatch = lineStr.match(/🔁\s*every\s+(\d+)?\s*(day|week|month|year)s?/i);
+            
+            if (recurrenceMatch) {
+                const amountStr = recurrenceMatch[1] || '1';
+                const amount = parseInt(amountStr, 10);
+                const unitStr = (recurrenceMatch[2] || 'day').toLowerCase();
+                
+                // 🌟 核心修复 2：使用字符串字面量联合类型替代 any
+                let unit: 'day' | 'week' | 'month' | 'year' = 'day';
+                if (unitStr === 'week') unit = 'week';
+                if (unitStr === 'month') unit = 'month';
+                if (unitStr === 'year') unit = 'year';
+
+                newTaskStr = lineStr; 
+                
+                const dateRegex = /(📅|⏳|🛫)\s*(\d{4}-\d{2}-\d{2})/gu;
+                newTaskStr = newTaskStr.replace(dateRegex, (match: string, icon: string, dateStr: string) => {
+                    const newDate = window.moment(dateStr).add(amount, unit).format('YYYY-MM-DD');
+                    return `${icon} ${newDate}`;
+                });
+                
+                newTaskStr = newTaskStr.replace(/-\s\[[xX]\]/, '- [ ]');
+                newTaskStr = newTaskStr.replace(/✅\s*\d{4}-\d{2}-\d{2}/u, '').trimEnd();
+            } else {
+                new Notice("该任务包含复杂重复规则，内置引擎暂时跳过新任务生成。建议检查 Tasks 插件状态。");
+            }
+        }
+
+        if (task.type === 'todo') { 
             lineStr = lineStr.replace(/-\s\[\s\]/, '- [x]');
-            if (!lineStr.includes('✅')) lineStr += ` ✅ ${window.moment().format('YYYY-MM-DD')}`;
-        } else {
-            lineStr = lineStr.replace(/-\s\[[xX]\]/, '- [ ]');
-            // 🌟 修复 trimRight 废弃报错
-            lineStr = lineStr.replace(/✅\s*\d{4}-\d{2}-\d{2}/, '').trimEnd();
+            if (!lineStr.match(/✅\s*\d{4}-\d{2}-\d{2}/u)) {
+                lineStr += ` ✅ ${window.moment().format('YYYY-MM-DD')}`;
+            }
+        } else { 
+            lineStr = lineStr.replace(/-\s\[x\]/i, '- [ ]');
+            lineStr = lineStr.replace(/\s*✅\s*\d{4}-\d{2}-\d{2}/u, '');
         }
 
         lines[task.line] = lineStr;
+
+        if (newTaskStr) {
+            lines.splice(task.line + 1, 0, newTaskStr);
+        }
+
         await this.app.vault.modify(file, lines.join('\n'));
     }
 
