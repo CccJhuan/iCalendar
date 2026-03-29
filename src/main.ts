@@ -30,7 +30,6 @@ export interface TaskItem {
     originalText: string;
 }
 
-// 🌟 核心修复 1：为 Dataview 的隐式 API 建立严格的类型定义，消灭 any 报错
 interface DataviewTask {
     completed: boolean;
     text: string;
@@ -42,7 +41,7 @@ interface DataviewTask {
 interface DataviewPage {
     file: {
         name: string;
-        path: string; // 🌟 修复：添加 path 属性
+        path: string;
         tasks?: DataviewTask[];
         day?: {
             toISODate: () => string;
@@ -65,7 +64,7 @@ interface ObsidianAppWithPlugins {
 
 interface DataviewAPI {
     pages(query: string): DataviewPage[];
-    page(path: string): DataviewPage | undefined; // 🌟 修复：添加 page 方法定义
+    page(path: string): DataviewPage | undefined;
 }
 
 export class ICalendarView extends ItemView {
@@ -82,7 +81,7 @@ export class ICalendarView extends ItemView {
     }
 
     getDisplayText(): string {
-        return "iCalendar"; // 🌟 修复 UI 文本大小写规范报错
+        return "iCalendar";
     }
 
     getIcon(): string {
@@ -94,7 +93,6 @@ export class ICalendarView extends ItemView {
         if (!container) return;
         container.empty();
         
-        // 🌟 修复直接操作 style 的报错，改用 class
         container.addClass('icalendar-plugin-container');
         
         this.root = createRoot(container);
@@ -114,8 +112,9 @@ export class ICalendarView extends ItemView {
 }
 
 export default class ICalendarPlugin extends Plugin {
-    settings!: ICalendarSettings; // 使用 ! 断言它一定会在 onload 中初始化
+    settings!: ICalendarSettings; 
     private taskCache: Map<string, TaskItem[]> = new Map();
+
     async onload(): Promise<void> {
         await this.loadSettings();
 
@@ -125,11 +124,9 @@ export default class ICalendarPlugin extends Plugin {
         );
 
         this.addRibbonIcon('calendar-clock', 'Open iCalendar view', () => {
-            // 🌟 修复 Floating Promise
             void this.activateView();
         });
 
-        // 🌟 修复命令名与 ID 的规范报错
         this.addCommand({
             id: 'open-view',
             name: 'Open calendar view',
@@ -141,9 +138,9 @@ export default class ICalendarPlugin extends Plugin {
             void this.initialFetch();
         });
 
-
         this.addSettingTab(new ICalendarSettingTab(this.app, this));
     }
+
     private async initialFetch() {
         const dv = this.getDataviewAPI();
         if (!dv) return;
@@ -152,6 +149,7 @@ export default class ICalendarPlugin extends Plugin {
             this.updateFileCache(page);
         }
     }
+
     public updateFileCache(page: DataviewPage) {
         if (!page.file.tasks) {
             this.taskCache.delete(page.file.path);
@@ -162,16 +160,16 @@ export default class ICalendarPlugin extends Plugin {
         const fileDate = page.file.day ? page.file.day.toISODate() : null;
 
         for (const t of page.file.tasks) {
-            // 使用预编译的 REGEX 对象进行解析（逻辑同你原有的 fetch，但更快）
-            const parsedTask = this.parseDataviewTask(t, page.file.name, fileDate);
+            const parsedTask = this.parseDataviewTask(t, page.file.name, fileDate, page.file.path);
             if (parsedTask) fileTasks.push(parsedTask);
         }
         
         this.taskCache.set(page.file.path, fileTasks);
     }
-    private parseDataviewTask(t: DataviewTask, fileName: string, fileDate: string | null): TaskItem | null {
+
+    private parseDataviewTask(t: DataviewTask, fileName: string, fileDate: string | null, filePath: string): TaskItem | null {
         let taskDate: string | null = null;
-        let type: 'todo' | 'done' = t.completed ? 'done' : 'todo';
+        const type: 'todo' | 'done' = t.completed ? 'done' : 'todo';
 
         if (t.completed) {
             const cMatch = t.text.match(REGEX.DONE_DATE);
@@ -182,10 +180,12 @@ export default class ICalendarPlugin extends Plugin {
         }
 
         if (!taskDate && fileDate) taskDate = fileDate;
-        if (!taskDate) return null; // 依然保留你的逻辑：无日期不显示
+        
+        // 🌟 核心引擎修改：允许收纳箱中的无日期任务穿透拦截
+        const isInboxTask = filePath === this.settings.inboxFilePath;
+        if (!taskDate && !isInboxTask) return null; 
 
         const rawText = t.text;
-        // 计算优先级
         let priorityLevel = 2;
         const prioMatch = rawText.match(REGEX.PRIORITY);
         if (prioMatch) {
@@ -206,6 +206,7 @@ export default class ICalendarPlugin extends Plugin {
             originalText: rawText
         };
     }
+
     private cleanTaskText(text: string): string {
         return text
             .replace(REGEX.DONE_DATE, '')
@@ -214,9 +215,11 @@ export default class ICalendarPlugin extends Plugin {
             .replace(REGEX.PRIORITY, '')
             .trim();
     }
+
     async getTasksFromCache(): Promise<TaskItem[]> {
         return Array.from(this.taskCache.values()).flat();
     }
+
     async activateView(): Promise<void> {
         const { workspace } = this.app;
         let leaf: WorkspaceLeaf | null = null;
@@ -225,20 +228,17 @@ export default class ICalendarPlugin extends Plugin {
         if (leaves.length > 0) {
             leaf = leaves[0] ?? null;
         } else {
-            // 🌟 更符合现代 API 的方式，取代 true
             leaf = workspace.getLeaf('tab');
             if (leaf) {
                 await leaf.setViewState({ type: VIEW_TYPE_ICALENDAR, active: true });
             }
         }
         if (leaf) {
-            // 🌟 修复 Floating Promise：在最新版 API 中，这可能被视为异步调用
             await workspace.revealLeaf(leaf);
         }
     }
 
     getDataviewAPI(): DataviewAPI | undefined {
-        // 使用 unknown 替代 any 进行安全的类型收窄
         const customApp = this.app as unknown as {
             plugins?: {
                 plugins?: {
@@ -278,7 +278,6 @@ export default class ICalendarPlugin extends Plugin {
                         taskDate = window.moment(t.completion).format('YYYY-MM-DD');
                     }
                 } else {
-                    // 🌟 修复 Emoji 代理对引起的误导性字符组报错，改用 (?:) 分组
                     const dMatch = t.text.match(/(?:📅|⏳|🛫)\s*(\d{4}-\d{2}-\d{2})/);
                     if (dMatch && dMatch[1]) {
                         taskDate = dMatch[1];
@@ -287,7 +286,10 @@ export default class ICalendarPlugin extends Plugin {
 
                 if (!taskDate && fileDate) taskDate = fileDate;
 
-                if (taskDate) {
+                // 🌟 核心引擎修改：兼容初次拉取时的收纳箱任务穿透
+                const isInboxTask = t.path === this.settings.inboxFilePath;
+
+                if (taskDate || isInboxTask) {
                     const rawText = t.text;
                     let priorityLevel = 2; 
                     if (rawText.includes('🔺')) priorityLevel = 5;
@@ -298,14 +300,13 @@ export default class ICalendarPlugin extends Plugin {
 
                     const tags = rawText.match(/#[\w\u4e00-\u9fa5/]+/g) || [];
                 
-                // 🌟 核心修复：彻底摒弃带 Emoji 的 [] 字符组，改用非捕获组 (?:)
-                const cleanContent = rawText
-                    .replace(/(?:✅|📅|⏳|🛫)\s*\d{4}-\d{2}-\d{2}/gu, '') 
-                    .replace(/#[\w\u4e00-\u9fa5/]+/g, '')
-                    .replace(/(?:🔺|⏫|🔼|🔽|⏬)/gu, '') 
-                    .trim();
-                
-                let hash = 0;
+                    const cleanContent = rawText
+                        .replace(/(?:✅|📅|⏳|🛫)\s*\d{4}-\d{2}-\d{2}/gu, '') 
+                        .replace(/#[\w\u4e00-\u9fa5/]+/g, '')
+                        .replace(/(?:🔺|⏫|🔼|🔽|⏬)/gu, '') 
+                        .trim();
+                    
+                    let hash = 0;
                     for (let i = 0; i < page.file.name.length; i++) hash += page.file.name.charCodeAt(i);
                     const colorIndex = (hash % 3) + 1;
 
@@ -326,27 +327,63 @@ export default class ICalendarPlugin extends Plugin {
         }
         return allTasks;
     }
+
+    // 🌟 全新收纳箱追加接口（自动创建目录与文件）
+    private async ensureFolderExists(path: string) {
+        const normalizedPath = path.replace(/\\/g, '/');
+        const folderPath = normalizedPath.substring(0, normalizedPath.lastIndexOf('/'));
+        if (folderPath === '' || folderPath === '/') return;
+
+        const folder = this.app.vault.getAbstractFileByPath(folderPath);
+        if (!folder) {
+            const folders = folderPath.split('/');
+            let currentPath = '';
+            for (const f of folders) {
+                currentPath += currentPath === '' ? f : `/${f}`;
+                const existing = this.app.vault.getAbstractFileByPath(currentPath);
+                if (!existing) {
+                    await this.app.vault.createFolder(currentPath);
+                }
+            }
+        }
+    }
+
+    async appendTaskToInbox(text: string): Promise<void> {
+        let inboxPath = this.settings.inboxFilePath.trim();
+        if (!inboxPath.endsWith('.md')) inboxPath += '.md';
+        
+        await this.ensureFolderExists(inboxPath);
+        
+        const file = this.app.vault.getAbstractFileByPath(inboxPath);
+        const newTaskLine = `- [ ] ${text}`;
+
+        if (file instanceof TFile) {
+            const content = await this.app.vault.read(file);
+            const newContent = content + (content.endsWith('\n') || content === '' ? '' : '\n') + newTaskLine;
+            await this.app.vault.modify(file, newContent);
+        } else {
+            await this.app.vault.create(inboxPath, newTaskLine);
+        }
+    }
+
     async revertTask(originalTask: TaskItem): Promise<void> {
         const file = this.app.vault.getAbstractFileByPath(originalTask.path);
         if (!(file instanceof TFile)) return;
 
         const content = await this.app.vault.read(file);
         const lines = content.split('\n');
-        let lineStr = lines[originalTask.line];
+        const lineStr = lines[originalTask.line];
         
-        // 基础校验：如果当前行完全不包含原始内容，说明文件可能被外部大幅篡改，放弃回滚
-        if (!lineStr) return;
+        if (lineStr === undefined) return;
 
-        // 🌟 强制恢复到原始文本（这是最简单且最暴力有效的回滚方式）
         lines[originalTask.line] = originalTask.originalText;
-        
         await this.app.vault.modify(file, lines.join('\n'));
     }
+
     async toggleTask(task: TaskItem): Promise<void> {
         const file = this.app.vault.getAbstractFileByPath(task.path);
         if (!(file instanceof TFile)) return;
 
-        // 🌟 核心修复 1：使用双重断言 (unknown -> 具体接口) 替代 any，满足严格安全检查
         const appWithPlugins = this.app as unknown as ObsidianAppWithPlugins;
         const tasksPlugin = appWithPlugins.plugins.plugins['obsidian-tasks-plugin'];
         
@@ -364,7 +401,6 @@ export default class ICalendarPlugin extends Plugin {
         let lineStr = lines[task.line];
         if (lineStr === undefined) return;
 
-        // 🌟 1. 捕获并剥离行尾的块引用哈希
         const blockRefRegex = /(\s+\^[a-zA-Z0-9-]+)\s*$/;
         const blockRefMatch = lineStr.match(blockRefRegex);
         const blockRef = blockRefMatch ? blockRefMatch[1] : '';
@@ -386,8 +422,6 @@ export default class ICalendarPlugin extends Plugin {
                 if (unitStr === 'month') unit = 'month';
                 if (unitStr === 'year') unit = 'year';
 
-                // 🌟 注意：这里 newTaskStr 是基于已经去除了 blockRef 的 lineStr 生成的
-                // 这完美避免了新周期任务与老任务产生 ID 冲突
                 newTaskStr = lineStr; 
                 
                 const dateRegex = /(📅|⏳|🛫)\s*(\d{4}-\d{2}-\d{2})/gu;
@@ -403,7 +437,6 @@ export default class ICalendarPlugin extends Plugin {
             }
         }
 
-        // 修改当前行的完成状态
         if (task.type === 'todo') { 
             lineStr = lineStr.replace(/-\s\[\s\]/, '- [x]');
             if (!lineStr.match(/✅\s*\d{4}-\d{2}-\d{2}/u)) {
@@ -414,7 +447,6 @@ export default class ICalendarPlugin extends Plugin {
             lineStr = lineStr.replace(/\s*✅\s*\d{4}-\d{2}-\d{2}/u, '');
         }
 
-        // 🌟 2. 将块引用拼回当前已被修改完毕的任务行末尾
         lines[task.line] = lineStr + blockRef;
 
         if (newTaskStr) {
@@ -434,15 +466,13 @@ export default class ICalendarPlugin extends Plugin {
         let lineStr = lines[task.line];
         if (lineStr === undefined) return;
 
-        // 🌟 1. 捕获并剥离行尾的块引用哈希 (形如 ^1a2b3c)
         const blockRefRegex = /(\s+\^[a-zA-Z0-9-]+)\s*$/;
         const blockRefMatch = lineStr.match(blockRefRegex);
         const blockRef = blockRefMatch ? blockRefMatch[1] : '';
         if (blockRef) {
-            lineStr = lineStr.replace(blockRefRegex, ''); // 暂时移除
+            lineStr = lineStr.replace(blockRefRegex, ''); 
         }
 
-        // --- 以下保持原有的日期和优先级修改逻辑 ---
         if (newDateStr) {
             const dateRegex = /((?:📅|⏳|🛫)\s*)\d{4}-\d{2}-\d{2}/u;
             if (dateRegex.test(lineStr)) {
@@ -464,9 +494,7 @@ export default class ICalendarPlugin extends Plugin {
                 lineStr += ` ${newIcon}`;
             }
         }
-        // --- 原有逻辑结束 ---
 
-        // 🌟 2. 将之前保存的块引用重新拼接回绝对末尾
         lines[task.line] = lineStr + blockRef;
         await this.app.vault.modify(file, lines.join('\n'));
     }

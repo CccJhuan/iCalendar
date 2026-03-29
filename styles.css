@@ -22,7 +22,6 @@
     --text-primary: var(--text-normal);
     --text-sub: var(--text-muted);
     
-    /* 🌟 重调热力图色值以获得极高辨识度 */
     --heat-0: var(--background-primary);
     --heat-1: rgba(106, 142, 174, 0.25);
     --heat-2: rgba(106, 142, 174, 0.50);
@@ -39,7 +38,119 @@
     height: 100%;
     box-sizing: border-box;
     overflow: hidden; 
+    position: relative; /* 🌟 用于绝对定位侧边栏 */
 }
+
+/* 🌟 新增：全局 Quick Add 快速输入条 */
+.quick-add-bar {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    width: 100%;
+}
+
+.quick-add-input {
+    flex: 1;
+    background: var(--background-modifier-form-field);
+    border: 1px solid var(--ios-border);
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-size: 1.05em;
+    color: var(--text-primary);
+    transition: all 0.2s;
+}
+
+.quick-add-input:focus {
+    border-color: var(--morandi-1);
+    box-shadow: 0 0 0 2px var(--morandi-1-bg);
+    outline: none;
+}
+
+.inbox-toggle-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px !important;
+    font-size: 1.05em !important;
+}
+
+.inbox-toggle-btn.active {
+    background: var(--morandi-1) !important;
+    color: white !important;
+}
+
+.inbox-badge {
+    background: rgba(128,128,128,0.2);
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 0.8em;
+}
+
+/* 🌟 新增：收纳箱侧滑抽屉面板 */
+.inbox-drawer {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 320px;
+    background: var(--ios-card-bg);
+    border-left: 1px solid var(--ios-border);
+    box-shadow: -8px 0 20px rgba(0,0,0,0.08);
+    transform: translateX(110%);
+    transition: transform 0.3s cubic-bezier(0.2, 0.8, 0.2, 1);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+}
+
+.inbox-drawer.open {
+    transform: translateX(0);
+}
+
+.inbox-drawer-header {
+    padding: 16px 20px;
+    border-bottom: 1px solid var(--ios-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.inbox-drawer-header h3 {
+    margin: 0;
+    font-size: 1.2em;
+    color: var(--text-primary);
+}
+
+.inbox-close-btn {
+    background: transparent;
+    border: none;
+    font-size: 1.2em;
+    cursor: pointer;
+    color: var(--text-sub);
+    transition: color 0.2s;
+}
+
+.inbox-close-btn:hover {
+    color: var(--text-error);
+}
+
+.inbox-drawer-content {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.inbox-empty-state {
+    text-align: center;
+    color: var(--text-sub);
+    opacity: 0.6;
+    margin-top: 40px;
+    font-size: 0.95em;
+}
+
 
 .fixed-top-area { flex-shrink: 0; display: flex; flex-direction: column; gap: 16px; border-bottom: 1px solid var(--ios-border); padding-bottom: 12px; }
 .dashboard-header { display: flex; justify-content: space-between; align-items: center; width: 100%; }
@@ -121,7 +232,6 @@
 .heat-3 .day-number, .heat-4 .day-number { color: white; }
 .task-count-badge { font-size: 0.7em; font-weight: 800; opacity: 0.9; line-height: 1; margin-top: 2px;}
 
-/* 🌟 热力图图例 */
 .heatmap-legend { display: flex; align-items: center; justify-content: flex-end; gap: 6px; padding-top: 20px; font-size: 0.8em; color: var(--text-sub); font-weight: 600;}
 .heatmap-legend .calendar-cell { width: 18px; height: 18px; border-radius: 4px; cursor: default; border: 1px solid var(--ios-border); }
 .heatmap-legend .calendar-cell:hover { transform: none; border-color: inherit; }
@@ -172,7 +282,7 @@
     color: var(--text-muted);
 }
 /* =========================================
-   🌟 核心功能：紧凑模式 (Compact Density) 
+   🌟 紧凑模式
    ========================================= */
 .density-compact .mini-task {
     padding: 6px 8px;
@@ -208,24 +318,6 @@
 .icalendar-undo-link:hover {
     color: var(--text-accent-hover);
 }
-/* 1. 优化月视图热力图颜色深度梯度 (深蓝绿体系) */
-.month-day-block {
-    border-radius: 6px;
-    border: 1px solid var(--border-color);
-    box-shadow: inset 0 0 1px rgba(255, 255, 255, 0.05); /* 增加一点质感 */
-}
-
-.month-day-block:hover {
-    transform: scale(1.05); /* 悬停缩放 */
-    border-color: var(--text-accent);
-    z-index: 1;
-}
-
-.month-day-block.max-productivity {
-    box-shadow: 0 0 6px rgba(11, 142, 175, 0.4); /* 满分日子增加光晕效果 */
-}
-
-/* 2. 好看的标签云样式 */
 .icalendar-tag-bubble {
     transition: all 0.2s ease-in-out;
 }

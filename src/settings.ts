@@ -1,4 +1,3 @@
- 
 import { App, PluginSettingTab, Setting } from 'obsidian';
 import type ICalendarPlugin from './main';
 
@@ -7,13 +6,15 @@ export interface ICalendarSettings {
     defaultGroup: 'file' | 'priority';
     taskDensity: 'standard' | 'compact';
     priorityWeights: Record<number, number>;
+    inboxFilePath: string; // 🌟 新增：收纳箱文件路径
 }
 
 export const DEFAULT_SETTINGS: ICalendarSettings = {
     defaultView: 'week',
     defaultGroup: 'priority',
     taskDensity: 'standard',
-    priorityWeights: { 5: 1, 4: 1, 3: 1, 2: 1, 1: 1, 0: 1 }
+    priorityWeights: { 5: 1, 4: 1, 3: 1, 2: 1, 1: 1, 0: 1 },
+    inboxFilePath: 'Inbox.md' // 🌟 默认路径
 }
 
 export class ICalendarSettingTab extends PluginSettingTab {
@@ -28,8 +29,20 @@ export class ICalendarSettingTab extends PluginSettingTab {
         const { containerEl } = this;
         containerEl.empty();
 
-        // 🌟 核心修复：使用官方推荐的 setHeading()，取代 createEl('h2')
-        ;
+        new Setting(containerEl).setName("基础视图配置").setHeading();
+
+        // 🌟 新增：收纳箱路径配置
+        new Setting(containerEl)
+            .setName('📥 任务收纳箱路径')
+            .setDesc('所有通过快速输入框创建的任务将默认保存在此文件中（需包含 .md 后缀，不存在会自动创建）')
+            .addText(text => text
+                .setPlaceholder('Inbox.md')
+                .setValue(this.plugin.settings.inboxFilePath)
+                .onChange(async (value) => {
+                    this.plugin.settings.inboxFilePath = value.trim() || 'Inbox.md';
+                    await this.plugin.saveSettings();
+                })
+            );
 
         new Setting(containerEl)
             .setName('默认视图')
@@ -71,23 +84,23 @@ export class ICalendarSettingTab extends PluginSettingTab {
                 })
             );
         
-            new Setting(containerEl).setName("效能权重配置").setHeading();
-            const prioLabels: Record<number, string> = { 5: '最高优先级 (🔺)', 4: '高优先级 (⏫)', 3: '中优先级 (🔼)', 2: '普通优先级', 1: '低优先级 (🔽)', 0: '最低优先级 (⏬)' };
-            
-            [5, 4, 3, 2, 1, 0].forEach(level => {
-                new Setting(containerEl)
-                    .setName(prioLabels[level] ?? '未知优先级')
-                    .setDesc(`计算进度条时，该优先级任务代表的权重分值`)
-                    .addText(text => text
-                        .setValue(String(this.plugin.settings.priorityWeights[level] ?? 1))
-                        .onChange(async (value) => {
-                            const num = parseFloat(value);
-                            if (!isNaN(num) && num > 0) {
-                                this.plugin.settings.priorityWeights[level] = num;
-                                await this.plugin.saveSettings();
-                            }
-                        })
-                    );
-            });
+        new Setting(containerEl).setName("效能权重配置").setHeading();
+        const prioLabels: Record<number, string> = { 5: '最高优先级 (🔺)', 4: '高优先级 (⏫)', 3: '中优先级 (🔼)', 2: '普通优先级', 1: '低优先级 (🔽)', 0: '最低优先级 (⏬)' };
+        
+        [5, 4, 3, 2, 1, 0].forEach(level => {
+            new Setting(containerEl)
+                .setName(prioLabels[level] ?? '未知优先级')
+                .setDesc(`计算进度条时，该优先级任务代表的权重分值`)
+                .addText(text => text
+                    .setValue(String(this.plugin.settings.priorityWeights[level] ?? 1))
+                    .onChange(async (value) => {
+                        const num = parseFloat(value);
+                        if (!isNaN(num) && num > 0) {
+                            this.plugin.settings.priorityWeights[level] = num;
+                            await this.plugin.saveSettings();
+                        }
+                    })
+                );
+        });
     }
 }
