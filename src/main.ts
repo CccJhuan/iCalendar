@@ -1,5 +1,5 @@
 /* eslint-disable obsidianmd/ui/sentence-case */
-import { Plugin, ItemView, WorkspaceLeaf, TFile, Notice, MarkdownView } from 'obsidian';
+import { Plugin, ItemView, WorkspaceLeaf, TFile, Notice, MarkdownView, Modal } from 'obsidian';
 import { createRoot, Root } from 'react-dom/client';
 import * as React from 'react';
 import { ICalendarSettings, DEFAULT_SETTINGS, ICalendarSettingTab } from './settings';
@@ -68,6 +68,63 @@ interface DataviewAPI {
     page(path: string): DataviewPage | undefined;
 }
 
+class TaskReminderModal extends Modal {
+    private plugin: ICalendarPlugin;
+    private remainingTasks: TaskItem[];
+
+    constructor(plugin: ICalendarPlugin, remainingTasks: TaskItem[]) {
+        super(plugin.app);
+        this.plugin = plugin;
+        this.remainingTasks = remainingTasks;
+    }
+
+    onOpen(): void {
+        const { contentEl } = this;
+        contentEl.empty();
+        contentEl.addClass('icalendar-reminder-modal');
+
+        const title = contentEl.createEl('h2', { text: '今日任务提醒' });
+        title.addClass('icalendar-reminder-title');
+
+        contentEl.createEl('p', {
+            text: `今天还有 ${this.remainingTasks.length} 个任务没有完成。`
+        }).addClass('icalendar-reminder-summary');
+
+        const list = contentEl.createEl('div');
+        list.addClass('icalendar-reminder-list');
+
+        this.remainingTasks.slice(0, 8).forEach(task => {
+            const item = list.createEl('button', { text: task.content });
+            item.addClass('icalendar-reminder-task');
+            item.onclick = () => {
+                void this.plugin.openTaskLocation(task);
+                this.close();
+            };
+        });
+
+        if (this.remainingTasks.length > 8) {
+            list.createEl('div', { text: `还有 ${this.remainingTasks.length - 8} 个任务未显示` }).addClass('icalendar-reminder-more');
+        }
+
+        const actions = contentEl.createEl('div');
+        actions.addClass('icalendar-reminder-actions');
+
+        const openViewButton = actions.createEl('button', { text: '打开今日视图' });
+        openViewButton.addClass('mod-cta');
+        openViewButton.onclick = () => {
+            void this.plugin.activateView();
+            this.close();
+        };
+
+        const confirmButton = actions.createEl('button', { text: '确认收到' });
+        confirmButton.onclick = () => this.close();
+    }
+
+    onClose(): void {
+        this.contentEl.empty();
+    }
+}
+
 export class ICalendarView extends ItemView {
     root: Root | null = null;
     plugin: ICalendarPlugin;
@@ -115,6 +172,7 @@ export class ICalendarView extends ItemView {
 export default class ICalendarPlugin extends Plugin {
     settings!: ICalendarSettings; 
     private taskCache: Map<string, TaskItem[]> = new Map();
+    private reminderShownKeys: Set<string> = new Set();
 
     private normalizeMarkdownPath(path: string): string {
         const normalizedPath = path.trim().replace(/\\/g, '/');
@@ -142,9 +200,70 @@ export default class ICalendarPlugin extends Plugin {
         });
         this.app.workspace.onLayoutReady(() => {
             void this.initialFetch();
+            this.startReminderLoop();
         });
 
         this.addSettingTab(new ICalendarSettingTab(this.app, this));
+    }
+
+    private startReminderLoop(): void {
+        this.checkTaskReminders();
+        this.registerInterval(window.setInterval(() => {
+            this.checkTaskReminders();
+        }, 30 * 1000));
+    }
+
+    public resetReminderState(): void {
+        this.reminderShownKeys.clear();
+        this.checkTaskReminders();
+    }
+
+    private normalizeReminderTimes(times: string[]): string[] {
+        return times
+            .map(time => time.trim())
+            .filter(time => /^([01]\d|2[0-3]):[0-5]\d$/.test(time));
+    }
+
+    private checkTaskReminders(): void {
+        if (!this.settings.taskReminderEnabled) return;
+
+        const now = window.moment();
+        const today = now.format('YYYY-MM-DD');
+        const currentMinute = now.format('HH:mm');
+        const reminderTimes = this.normalizeReminderTimes(this.settings.taskReminderTimes);
+        if (!reminderTimes.includes(currentMinute)) return;
+
+        const reminderKey = `${today}-${currentMinute}`;
+        if (this.reminderShownKeys.has(reminderKey)) return;
+
+        this.reminderShownKeys.add(reminderKey);
+        void this.showTaskReminderIfNeeded(today);
+    }
+
+    private async showTaskReminderIfNeeded(today: string): Promise<void> {
+        await this.refreshTaskCache();
+        const remainingTasks = this.getTodayRemainingTasks(today);
+        if (remainingTasks.length === 0) return;
+        new TaskReminderModal(this, remainingTasks).open();
+    }
+
+    private async refreshTaskCache(): Promise<void> {
+        const dv = this.getDataviewAPI();
+        if (!dv) return;
+        const pages = dv.pages('""');
+        for (const page of pages) {
+            this.updateFileCache(page);
+        }
+    }
+
+    private getTodayRemainingTasks(today: string): TaskItem[] {
+        return Array.from(this.taskCache.values())
+            .flat()
+            .filter(task => task.type === 'todo' && task.date === today)
+            .sort((a, b) => {
+                if (a.priority !== b.priority) return b.priority - a.priority;
+                return a.fileName.localeCompare(b.fileName);
+            });
     }
 
     private async initialFetch() {

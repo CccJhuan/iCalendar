@@ -495,6 +495,60 @@
     padding: 0;
 }
 
+.icalendar-reminder-modal {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.icalendar-reminder-title {
+    margin: 0;
+    font-size: 1.35em;
+    font-weight: 800;
+}
+
+.icalendar-reminder-summary {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.98em;
+}
+
+.icalendar-reminder-list {
+    max-height: 280px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.icalendar-reminder-task {
+    width: 100%;
+    text-align: left;
+    border: 1px solid var(--ios-hairline);
+    border-radius: 10px;
+    background: var(--background-secondary);
+    color: var(--text-normal);
+    padding: 8px 10px;
+    cursor: pointer;
+}
+
+.icalendar-reminder-task:hover {
+    border-color: var(--ios-blue);
+    background: var(--ios-blue-soft);
+}
+
+.icalendar-reminder-more {
+    color: var(--text-muted);
+    font-size: 0.86em;
+    padding: 2px 4px;
+}
+
+.icalendar-reminder-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
 /* Compact toolbar */
 .task-dashboard-container {
     padding: 14px;

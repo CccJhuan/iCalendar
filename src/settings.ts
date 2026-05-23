@@ -7,6 +7,8 @@ export interface ICalendarSettings {
     taskDensity: 'standard' | 'compact';
     priorityWeights: Record<number, number>;
     inboxFilePath: string; // 🌟 新增：收纳箱文件路径
+    taskReminderEnabled: boolean;
+    taskReminderTimes: string[];
 }
 
 export const DEFAULT_SETTINGS: ICalendarSettings = {
@@ -14,7 +16,9 @@ export const DEFAULT_SETTINGS: ICalendarSettings = {
     defaultGroup: 'priority',
     taskDensity: 'standard',
     priorityWeights: { 5: 1, 4: 1, 3: 1, 2: 1, 1: 1, 0: 1 },
-    inboxFilePath: 'Inbox.md' // 🌟 默认路径
+    inboxFilePath: 'Inbox.md', // 🌟 默认路径
+    taskReminderEnabled: false,
+    taskReminderTimes: ['09:00', '14:00', '20:00']
 }
 
 export class ICalendarSettingTab extends PluginSettingTab {
@@ -83,6 +87,37 @@ export class ICalendarSettingTab extends PluginSettingTab {
                     await this.plugin.saveSettings();
                 })
             );
+
+        new Setting(containerEl).setName("任务提醒").setHeading();
+
+        new Setting(containerEl)
+            .setName('开启今日任务提醒')
+            .setDesc('在设定时间弹出确认弹窗，提醒今天还有多少任务未完成。')
+            .addToggle(toggle => toggle
+                .setValue(this.plugin.settings.taskReminderEnabled)
+                .onChange(async (value) => {
+                    this.plugin.settings.taskReminderEnabled = value;
+                    await this.plugin.saveSettings();
+                    this.plugin.resetReminderState();
+                })
+            );
+
+        [0, 1, 2].forEach(index => {
+            new Setting(containerEl)
+                .setName(`提醒时间 ${index + 1}`)
+                .setDesc('使用 24 小时格式，例如 09:00、14:30。留空则禁用该时间。')
+                .addText(text => text
+                    .setPlaceholder(index === 0 ? '09:00' : (index === 1 ? '14:00' : '20:00'))
+                    .setValue(this.plugin.settings.taskReminderTimes[index] ?? '')
+                    .onChange(async (value) => {
+                        const nextTimes = [...this.plugin.settings.taskReminderTimes];
+                        nextTimes[index] = value.trim();
+                        this.plugin.settings.taskReminderTimes = nextTimes;
+                        await this.plugin.saveSettings();
+                        this.plugin.resetReminderState();
+                    })
+                );
+        });
         
         new Setting(containerEl).setName("效能权重配置").setHeading();
         const prioLabels: Record<number, string> = { 5: '最高优先级 (🔺)', 4: '高优先级 (⏫)', 3: '中优先级 (🔼)', 2: '普通优先级', 1: '低优先级 (🔽)', 0: '最低优先级 (⏬)' };
