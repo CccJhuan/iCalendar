@@ -33,6 +33,7 @@ export interface TaskItem {
 interface DataviewTask {
     completed: boolean;
     text: string;
+    status?: string;
     completion?: string | Date;
     path: string;
     line: number;
@@ -175,7 +176,7 @@ export default class ICalendarPlugin extends Plugin {
     private parseDataviewTask(t: DataviewTask, fileName: string, fileDate: string | null): TaskItem | null {
         let taskDate: string | null = null;
         const statusMatch = t.text.match(REGEX.TASK_MARKER);
-        const statusMarker = statusMatch?.[1] || ' ';
+        const statusMarker = t.status || statusMatch?.[1] || ' ';
         const type: TaskItem['type'] = statusMarker === '-' ? 'cancelled' : (t.completed ? 'done' : 'todo');
 
         if (type === 'done') {

@@ -141,7 +141,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
     }, [sortedTasks]);
 
     const calendarTasks = useMemo(() => {
-        return sortedTasks.filter(t => Boolean(t.date) && t.type !== 'cancelled');
+        return sortedTasks.filter(t => Boolean(t.date));
     }, [sortedTasks]);
 
     const overdueTasks = useMemo(() => {
@@ -167,8 +167,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
 
     const memoizedFilteredTasks = useMemo(() => {
         return calendarTasks.filter(t => {
-            if (t.type === 'cancelled') return false;
-            if (!showCompleted && t.type === 'done') return false;
+            if (!showCompleted && (t.type === 'done' || t.type === 'cancelled')) return false;
             
             if (filterEnabled && selectedTags.length > 0) {
                 const taskTags = t.tags || [];
@@ -390,28 +389,30 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
 
     const renderMiniTaskCard = (task: TaskItem, key: string, showDate = false) => {
         const cardBorderClass = groupMode === 'priority'
-            ? (task.type === 'done' ? 'prio-group-done' : `priority-level-${task.priority}`)
+            ? (task.type === 'cancelled' ? 'prio-group-cancelled' : (task.type === 'done' ? 'prio-group-done' : `priority-level-${task.priority}`))
             : `accent-type-${task.colorIndex}`;
 
         return (
             <div key={key} className={`mini-task ${task.type} ${cardBorderClass}`} draggable onDragStart={e => handleDragStart(e, task)} onDragEnd={handleDragEnd}>
                 <div className="mini-task-main-row">
-                    <a className="internal-link-wrapper internal-link" data-href={task.path} href={task.path}>
-                        <div className="mini-task-content" style={{textDecoration: task.type === 'done' ? 'line-through' : 'none'}}>
-                            {PRIORITY_MAP[task.priority]?.icon && `${PRIORITY_MAP[task.priority]?.icon} `}{task.content}
+                    <a className="internal-link-wrapper internal-link" data-href={task.path} href={task.path} onClick={(e) => void handleOpenTask(e, task)}>
+                        <div className="mini-task-content" style={{textDecoration: task.type === 'done' || task.type === 'cancelled' ? 'line-through' : 'none'}}>
+                            {task.type === 'todo' && PRIORITY_MAP[task.priority]?.icon && `${PRIORITY_MAP[task.priority]?.icon} `}{task.content}
                         </div>
                     </a>
-                    <button
-                        className={`mini-task-check ${task.type === 'done' ? 'checked' : ''}`}
-                        title={task.type === 'done' ? '标记为未完成' : '标记为完成'}
-                        onClick={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            void handleCheckboxClick(task);
-                        }}
-                    >
-                        ✓
-                    </button>
+                    {task.type !== 'cancelled' && (
+                        <button
+                            className={`mini-task-check ${task.type === 'done' ? 'checked' : ''}`}
+                            title={task.type === 'done' ? '标记为未完成' : '标记为完成'}
+                            onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                void handleCheckboxClick(task);
+                            }}
+                        >
+                            ✓
+                        </button>
+                    )}
                 </div>
                 <div className="tag-container" style={{marginTop: '2px'}}>
                     <div className="task-tag file-tag">{task.fileName}</div>
@@ -428,20 +429,53 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
             return <div className="inbox-empty-state">目前没有未安排任务</div>;
         }
 
-        const groups: Record<string, TaskItem[]> = {};
+        const groups: TaskGroups = {};
         inboxTasks.forEach(task => {
             if (!groups[task.fileName]) groups[task.fileName] = [];
             groups[task.fileName]?.push(task);
         });
 
-        return Object.entries(groups)
-            .sort((a, b) => a[0].localeCompare(b[0]))
-            .map(([fileName, groupTasks]) => (
+        const groupEntries = Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0]));
+        const visibleGroupEntries = activeInboxFile ? groupEntries.filter(([fileName]) => fileName === activeInboxFile) : groupEntries;
+
+        return visibleGroupEntries.map(([fileName, groupTasks]) => (
                 <div key={fileName} className="inbox-file-group">
                     <div className="inbox-file-header">{fileName}<span>{groupTasks.length}</span></div>
                     {groupTasks.map((task, idx) => renderMiniTaskCard(task, `inbox-${task.path}-${task.line}-${idx}`))}
                 </div>
             ));
+    };
+
+    const renderInboxDirectory = () => {
+        if (inboxTasks.length === 0) return null;
+
+        const groups: TaskGroups = {};
+        inboxTasks.forEach(task => {
+            if (!groups[task.fileName]) groups[task.fileName] = [];
+            groups[task.fileName]?.push(task);
+        });
+
+        return (
+            <div className="inbox-directory">
+                <button
+                    className={`inbox-directory-item ${activeInboxFile === null ? 'active' : ''}`}
+                    onClick={() => setActiveInboxFile(null)}
+                >
+                    <span>全部文档</span>
+                    <strong>{inboxTasks.length}</strong>
+                </button>
+                {Object.entries(groups).sort((a, b) => a[0].localeCompare(b[0])).map(([fileName, groupTasks]) => (
+                    <button
+                        key={fileName}
+                        className={`inbox-directory-item ${activeInboxFile === fileName ? 'active' : ''}`}
+                        onClick={() => setActiveInboxFile(fileName)}
+                    >
+                        <span>{fileName}</span>
+                        <strong>{groupTasks.length}</strong>
+                    </button>
+                ))}
+            </div>
+        );
     };
 
     const getPerformanceEmoji = (percent: number) => {
@@ -483,7 +517,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         dayTasks.forEach(t => {
             let key: string;
             if (groupMode === 'priority') {
-                key = t.type === 'done' ? 'done' : String(t.priority);
+                key = t.type === 'cancelled' ? 'cancelled' : (t.type === 'done' ? 'done' : String(t.priority));
             } else {
                 key = t.fileName;
             }
@@ -494,8 +528,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
 
         const groupKeys = Object.keys(groups).sort((a, b) => {
             if (groupMode === 'priority') {
-                if (a === 'done') return 1;
-                if (b === 'done') return -1;
+                if (a === 'cancelled') return 1;
+                if (b === 'cancelled') return -1;
+                if (a === 'done') return b === 'cancelled' ? -1 : 1;
+                if (b === 'done') return a === 'cancelled' ? 1 : -1;
                 return Number(b) - Number(a);
             }
             return a.localeCompare(b);
@@ -509,12 +545,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                     if (!firstTask) return null;
 
                     const isDoneGroup = key === 'done';
+                    const isCancelledGroup = key === 'cancelled';
                     const cardClass = groupMode === 'priority' 
-                        ? (isDoneGroup ? 'prio-group-done' : `prio-group-${key}`) 
+                        ? (isCancelledGroup ? 'prio-group-cancelled' : (isDoneGroup ? 'prio-group-done' : `prio-group-${key}`))
                         : `group-type-${firstTask.colorIndex}`;
                     
                     const headerText = groupMode === 'priority' 
-                        ? (isDoneGroup ? '✅ 已完成' : (PRIORITY_MAP[Number(key)]?.label || key)) 
+                        ? (isCancelledGroup ? '❌ 已取消' : (isDoneGroup ? '✅ 已完成' : (PRIORITY_MAP[Number(key)]?.label || key)))
                         : key;
 
                     return (
@@ -525,7 +562,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                             onDragLeave={e => (e.currentTarget as HTMLElement).removeClass('drop-zone-active')}
                             onDrop={e => { 
                                 (e.currentTarget as HTMLElement).removeClass('drop-zone-active'); 
-                                void handleDrop(e, dateStr, isDoneGroup ? 'done' : (groupMode === 'priority' ? Number(key) : null)); 
+                                if (!isCancelledGroup) void handleDrop(e, dateStr, isDoneGroup ? 'done' : (groupMode === 'priority' ? Number(key) : null));
                             }}
                         >
                             <div className="file-group-header">{headerText}</div>
@@ -533,24 +570,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                             {groupTasks.map((t, idx) => (
                                 <div 
                                     key={`${t.path}-${t.line}-${idx}`} 
-                                    className={`ios-task-item ${t.type === 'done' ? 'checked' : ''}`} 
+                                    className={`ios-task-item ${t.type === 'done' ? 'checked' : ''} ${t.type === 'cancelled' ? 'cancelled' : ''}`}
                                     draggable 
                                     onDragStart={e => handleDragStart(e, t)} 
                                     onDragEnd={handleDragEnd}
                                 >
                                     <div 
-                                        className={`ios-checkbox ${t.type === 'done' ? 'checked' : 'unchecked'}`} 
+                                        className={`ios-checkbox ${t.type === 'done' ? 'checked' : 'unchecked'} ${t.type === 'cancelled' ? 'cancelled' : ''}`}
                                         onClick={(e) => { e.stopPropagation(); void handleCheckboxClick(t); }}
                                     >✓</div>
                                     <div className="task-content-wrapper">
-                                        <a className="internal-link-wrapper internal-link" data-href={t.path} href={t.path}>
-                                            <div className="task-text" style={{textDecoration: t.type === 'done' ? 'line-through' : 'none'}}>
-                                                {!isDoneGroup && groupMode !== 'priority' && PRIORITY_MAP[t.priority]?.icon && `${PRIORITY_MAP[t.priority]?.icon} `}
+                                        <a className="internal-link-wrapper internal-link" data-href={t.path} href={t.path} onClick={(e) => void handleOpenTask(e, t)}>
+                                            <div className="task-text" style={{textDecoration: t.type === 'done' || t.type === 'cancelled' ? 'line-through' : 'none'}}>
+                                                {!isDoneGroup && !isCancelledGroup && groupMode !== 'priority' && PRIORITY_MAP[t.priority]?.icon && `${PRIORITY_MAP[t.priority]?.icon} `}
                                                 {t.content}
                                             </div>
                                         </a>
                                         <div className="tag-container">
-                                            {(groupMode === 'priority' || isDoneGroup) && <div className="task-tag file-tag">{t.fileName}</div>}
+                                            {(groupMode === 'priority' || isDoneGroup || isCancelledGroup) && <div className="task-tag file-tag">{t.fileName}</div>}
                                             {t.tags.map((tag, i) => <div key={i} className="task-tag">{tag}</div>)}
                                         </div>
                                         {t.type === 'todo' && renderTaskActions(t, 'full')}
@@ -604,15 +641,19 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
 
             const groups: Record<string, TaskItem[]> = {};
             dTasksFiltered.forEach(t => {
-                const key = (groupMode === 'priority' && t.type === 'done') ? 'done' : (groupMode === 'priority' ? String(t.priority) : t.fileName);
+                const key = groupMode === 'priority'
+                    ? (t.type === 'cancelled' ? 'cancelled' : (t.type === 'done' ? 'done' : String(t.priority)))
+                    : t.fileName;
                 if (!groups[key]) groups[key] = [];
                 groups[key]?.push(t);
             });
 
             const groupKeys = Object.keys(groups).sort((a, b) => {
                 if (groupMode === 'priority') {
-                    if (a === 'done') return 1;
-                    if (b === 'done') return -1;
+                    if (a === 'cancelled') return 1;
+                    if (b === 'cancelled') return -1;
+                    if (a === 'done') return b === 'cancelled' ? -1 : 1;
+                    if (b === 'done') return a === 'cancelled' ? 1 : -1;
                     return Number(b) - Number(a);
                 }
                 return a.localeCompare(b);
@@ -642,10 +683,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                         {groupKeys.map(key => {
                             const groupTasks = groups[key] || [];
                             const isDoneGroup = key === 'done';
-                            const headerText = groupMode === 'priority' ? (isDoneGroup ? '✅ 已完成' : PRIORITY_MAP[Number(key)]?.label) : key;
+                            const isCancelledGroup = key === 'cancelled';
+                            const headerText = groupMode === 'priority'
+                                ? (isCancelledGroup ? '❌ 已取消' : (isDoneGroup ? '✅ 已完成' : PRIORITY_MAP[Number(key)]?.label))
+                                : key;
                             
                             return (
-                                <div key={key} className={`week-file-group ${isDoneGroup ? 'prio-group-done' : ''}`}>
+                                <div key={key} className={`week-file-group ${isDoneGroup ? 'prio-group-done' : ''} ${isCancelledGroup ? 'prio-group-cancelled' : ''}`}>
                                     <div className="week-file-header">{headerText}</div>
                                     {groupTasks.map((t, idx) => renderMiniTaskCard(t, `${t.path}-${t.line}-${idx}`))}
                                 </div>
@@ -702,10 +746,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                         {previewTasks.map((task, idx) => (
                             <div
                                 key={`${task.path}-${task.line}-${idx}`}
-                                className={`month-task-chip ${task.type === 'done' ? 'done' : ''} priority-level-${task.priority}`}
+                                className={`month-task-chip ${task.type === 'done' ? 'done' : ''} ${task.type === 'cancelled' ? 'cancelled' : ''} priority-level-${task.priority}`}
                                 draggable
                                 onDragStart={e => handleDragStart(e, task)}
                                 onDragEnd={handleDragEnd}
+                                onClick={(e) => void handleOpenTask(e, task)}
                                 title={`${task.fileName}: ${task.content}`}
                             >
                                 <span className="month-task-dot"></span>
@@ -764,11 +809,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                     <h3>📥 未安排任务</h3>
                     <button className="inbox-close-btn" onClick={() => setShowInbox(false)}>✖</button>
                 </div>
-                <div className="inbox-drawer-content">
+                <div className="inbox-drawer-actions">
+                    <button className="nav-btn" onClick={() => void moveTasksToDate(inboxTasks, todayStr, 'unplanned')}>全部移到今天</button>
+                </div>
+                <div className="inbox-drawer-body">
+                    {renderInboxDirectory()}
                     <div className="inbox-drawer-actions">
-                        <button className="nav-btn" onClick={() => void moveTasksToDate(inboxTasks, todayStr, 'unplanned')}>全部移到今天</button>
+                        {activeInboxFile && <button className="nav-btn" onClick={() => setActiveInboxFile(null)}>显示全部</button>}
                     </div>
-                    {renderInboxGroups()}
+                    <div className="inbox-drawer-content">
+                        {renderInboxGroups()}
+                    </div>
                 </div>
             </div>
 

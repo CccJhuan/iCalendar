@@ -151,6 +151,16 @@
     font-size: 0.95em;
 }
 
+.inbox-drawer-body {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: 118px minmax(0, 1fr);
+    grid-template-rows: auto 1fr;
+    gap: 10px;
+    padding: 12px;
+}
+
 
 .fixed-top-area { flex-shrink: 0; display: flex; flex-direction: column; gap: 16px; border-bottom: 1px solid var(--ios-border); padding-bottom: 12px; }
 .dashboard-header { display: flex; justify-content: space-between; align-items: center; width: 100%; }
@@ -250,6 +260,8 @@
 .mini-task:hover { transform: translateY(-2px); box-shadow: 0 4px 8px rgba(0,0,0,0.08); z-index: 2; }
 .mini-task.done { opacity: 0.5; filter: grayscale(1); border-left-color: var(--text-muted) !important; background: transparent;}
 .mini-task.done .mini-task-content { text-decoration: line-through; color: var(--text-muted); }
+.mini-task.cancelled { opacity: 0.48; filter: grayscale(1); border-left-color: var(--text-muted) !important; background: transparent;}
+.mini-task.cancelled .mini-task-content { text-decoration: line-through; color: var(--text-muted); }
 .mini-task-content { font-size: 1.05em; font-weight: 600; line-height: 1.4; color: var(--text-primary); word-break: break-word; }
 .mini-task-main-row { display: flex; align-items: flex-start; gap: 8px; }
 .mini-task-main-row .internal-link-wrapper { flex: 1; min-width: 0; }
@@ -303,7 +315,28 @@
     background: transparent !important;
 }
 
+.prio-group-cancelled {
+    border-top: 4px solid var(--text-faint) !important;
+    opacity: 0.62;
+    background: transparent !important;
+}
+
 .prio-group-done .file-group-header {
+    color: var(--text-muted);
+}
+
+.prio-group-cancelled .file-group-header,
+.week-file-group.prio-group-cancelled .week-file-header {
+    color: var(--text-muted);
+}
+
+.ios-task-item.cancelled {
+    opacity: 0.55;
+}
+
+.ios-checkbox.cancelled {
+    background: transparent;
+    border-color: var(--text-faint);
     color: var(--text-muted);
 }
 /* =========================================
@@ -442,12 +475,64 @@
 
 /* Inbox as global unscheduled task drawer */
 .inbox-drawer-content {
+    grid-column: 2;
     gap: 14px;
+    padding: 0;
 }
 
 .inbox-drawer-actions {
     display: flex;
     justify-content: flex-end;
+    padding: 10px 12px 0;
+}
+
+.inbox-drawer-body > .inbox-drawer-actions {
+    grid-column: 2;
+    padding: 0;
+}
+
+.inbox-directory {
+    grid-row: 1 / span 2;
+    min-width: 0;
+    overflow-y: auto;
+    border-right: 1px solid var(--ios-border);
+    padding-right: 8px;
+}
+
+.inbox-directory-item {
+    width: 100%;
+    min-height: 30px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-sub);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    padding: 4px 7px;
+    margin-bottom: 4px;
+    font-size: 0.78em;
+    text-align: left;
+}
+
+.inbox-directory-item span {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.inbox-directory-item strong {
+    flex: 0 0 auto;
+    font-size: 0.85em;
+    color: var(--text-muted);
+}
+
+.inbox-directory-item:hover,
+.inbox-directory-item.active {
+    background: var(--background-modifier-form-field);
+    color: var(--text-primary);
 }
 
 .inbox-file-group {
@@ -651,6 +736,7 @@
     font-size: 0.78em;
     font-weight: 650;
     line-height: 1.25;
+    cursor: pointer;
 }
 
 .month-task-chip span:last-child {
@@ -662,6 +748,12 @@
 .month-task-chip.done {
     opacity: 0.55;
     text-decoration: line-through;
+}
+
+.month-task-chip.cancelled {
+    opacity: 0.48;
+    text-decoration: line-through;
+    filter: grayscale(1);
 }
 
 .month-task-dot {
