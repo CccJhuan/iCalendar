@@ -360,6 +360,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         }
     };
 
+    const formatTaskDateLabel = (dateStr: string | null) => {
+        if (!dateStr) return '安排';
+        if (dateStr === todayStr) return '今天';
+        return window.moment(dateStr).format('M.D');
+    };
+
     const renderTaskActions = (task: TaskItem, variant: 'mini' | 'full' = 'mini') => (
         <div className={`task-actions ${variant === 'full' ? 'task-actions-full' : ''}`}>
             <button
@@ -371,19 +377,22 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                     void moveTaskToDate(task, todayStr);
                 }}
             >
-                今天
+                {variant === 'mini' ? '今' : '今天'}
             </button>
-            <input
-                className="task-date-picker"
-                type="date"
-                title="移动到指定日期"
-                value={task.date || ''}
-                onClick={(e) => e.stopPropagation()}
-                onChange={(e) => {
-                    e.stopPropagation();
-                    void handleTaskDateChange(task, e.currentTarget.value);
-                }}
-            />
+            <label className="task-date-chip" title="移动到指定日期">
+                {variant === 'full' && <span className="task-date-icon">⌁</span>}
+                <span>{formatTaskDateLabel(task.date)}</span>
+                <input
+                    className="task-date-picker"
+                    type="date"
+                    value={task.date || ''}
+                    onClick={(e) => e.stopPropagation()}
+                    onChange={(e) => {
+                        e.stopPropagation();
+                        void handleTaskDateChange(task, e.currentTarget.value);
+                    }}
+                />
+            </label>
         </div>
     );
 
@@ -414,12 +423,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                         </button>
                     )}
                 </div>
-                <div className="tag-container" style={{marginTop: '2px'}}>
+                <div className="task-meta-row" style={{marginTop: '2px'}}>
+                    <div className="tag-container">
                     <div className="task-tag file-tag">{task.fileName}</div>
                     {showDate && task.date && <div className="task-tag">{window.moment(task.date).format('M.D')}</div>}
                     {task.tags.map((tag, i) => <div key={i} className="task-tag">{tag}</div>)}
+                    </div>
+                    {task.type === 'todo' && renderTaskActions(task, 'mini')}
                 </div>
-                {task.type === 'todo' && renderTaskActions(task)}
             </div>
         );
     };
@@ -586,11 +597,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                                                 {t.content}
                                             </div>
                                         </a>
-                                        <div className="tag-container">
-                                            {(groupMode === 'priority' || isDoneGroup || isCancelledGroup) && <div className="task-tag file-tag">{t.fileName}</div>}
-                                            {t.tags.map((tag, i) => <div key={i} className="task-tag">{tag}</div>)}
+                                        <div className="task-meta-row task-meta-row-full">
+                                            <div className="tag-container">
+                                                {(groupMode === 'priority' || isDoneGroup || isCancelledGroup) && <div className="task-tag file-tag">{t.fileName}</div>}
+                                                {t.tags.map((tag, i) => <div key={i} className="task-tag">{tag}</div>)}
+                                            </div>
+                                            {t.type === 'todo' && renderTaskActions(t, 'full')}
                                         </div>
-                                        {t.type === 'todo' && renderTaskActions(t, 'full')}
                                     </div>
                                 </div>
                             ))}
