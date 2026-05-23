@@ -251,6 +251,31 @@
 .mini-task.done { opacity: 0.5; filter: grayscale(1); border-left-color: var(--text-muted) !important; background: transparent;}
 .mini-task.done .mini-task-content { text-decoration: line-through; color: var(--text-muted); }
 .mini-task-content { font-size: 1.05em; font-weight: 600; line-height: 1.4; color: var(--text-primary); word-break: break-word; }
+.mini-task-main-row { display: flex; align-items: flex-start; gap: 8px; }
+.mini-task-main-row .internal-link-wrapper { flex: 1; min-width: 0; }
+.mini-task-check {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    display: grid;
+    place-items: center;
+    border-radius: 6px;
+    border: 1px solid var(--ios-border);
+    background: var(--background-modifier-form-field);
+    color: transparent;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 800;
+    padding: 0;
+}
+.mini-task-check:hover {
+    border-color: var(--morandi-1);
+}
+.mini-task-check.checked {
+    background: var(--text-sub);
+    border-color: var(--text-sub);
+    color: var(--background-primary);
+}
 
 .tag-container { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px;}
 .task-tag { font-size: 0.75em; padding: 2px 8px; border-radius: 6px; background: rgba(128, 128, 128, 0.1); color: var(--text-sub); line-height: 1.2; font-weight: 500;}
@@ -336,4 +361,339 @@
     cursor: pointer;
     font-size: 0.9em;
     padding: 0;
+}
+
+/* Compact toolbar */
+.task-dashboard-container {
+    padding: 14px;
+    gap: 10px;
+}
+
+.fixed-top-area {
+    gap: 8px;
+    padding-bottom: 8px;
+}
+
+.dashboard-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 36px;
+}
+
+.dashboard-toolbar .dashboard-title {
+    flex: 0 0 auto;
+    min-width: 96px;
+    font-size: 1.08em;
+    white-space: nowrap;
+}
+
+.dashboard-toolbar .quick-add-bar {
+    flex: 1 1 240px;
+    min-width: 180px;
+    width: auto;
+    gap: 6px;
+}
+
+.dashboard-toolbar .quick-add-input {
+    height: 32px;
+    min-width: 120px;
+    padding: 4px 10px;
+    font-size: 0.92em;
+}
+
+.dashboard-toolbar .right-controls {
+    flex: 0 1 auto;
+    gap: 8px;
+    min-width: 0;
+}
+
+.dashboard-toolbar .header-controls,
+.dashboard-toolbar .view-switcher,
+.dashboard-toolbar .group-switcher {
+    flex-shrink: 0;
+}
+
+.dashboard-toolbar .nav-btn,
+.dashboard-toolbar .view-btn,
+.dashboard-toolbar .group-btn {
+    min-height: 28px;
+    padding: 3px 8px;
+    white-space: nowrap;
+}
+
+.nav-btn.active {
+    background: var(--background-primary);
+    color: var(--text-primary);
+    font-weight: 800;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+}
+
+.nav-btn.danger {
+    color: var(--text-error);
+}
+
+.priority-dock {
+    padding: 6px 10px;
+    justify-content: flex-start;
+    overflow-x: auto;
+}
+
+/* Inbox as global unscheduled task drawer */
+.inbox-drawer-content {
+    gap: 14px;
+}
+
+.inbox-drawer-actions {
+    display: flex;
+    justify-content: flex-end;
+}
+
+.inbox-file-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.inbox-file-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    color: var(--text-sub);
+    font-size: 0.82em;
+    font-weight: 800;
+    padding: 0 2px 4px;
+    border-bottom: 1px solid var(--ios-border);
+}
+
+.inbox-file-header span {
+    font-size: 0.78em;
+    background: rgba(128, 128, 128, 0.12);
+    border-radius: 10px;
+    padding: 1px 7px;
+}
+
+/* Task quick actions */
+.task-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
+    margin-top: 2px;
+}
+
+.task-actions-full {
+    margin-top: 6px;
+}
+
+.task-action-btn,
+.task-date-picker {
+    min-height: 24px;
+    border: 1px solid var(--ios-border);
+    border-radius: 6px;
+    background: var(--background-modifier-form-field);
+    color: var(--text-sub);
+    font-size: 0.78em;
+    font-weight: 700;
+    padding: 2px 7px;
+}
+
+.task-action-btn {
+    cursor: pointer;
+}
+
+.task-action-btn:hover,
+.task-date-picker:hover {
+    border-color: var(--morandi-1);
+    color: var(--text-primary);
+}
+
+.task-date-picker {
+    max-width: 118px;
+}
+
+/* Month kanban board */
+.month-board-wrapper {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
+}
+
+.month-board-summary {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 10px 12px;
+    background: var(--ios-card-bg);
+    border: 1px solid var(--ios-border);
+    border-radius: 8px;
+}
+
+.month-summary-meta {
+    color: var(--text-sub);
+    font-size: 0.86em;
+    margin-top: 2px;
+}
+
+.month-summary-progress {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 220px;
+    font-weight: 800;
+}
+
+.month-summary-progress .progress-container {
+    min-width: 150px;
+    margin-top: 0;
+}
+
+.month-board-grid {
+    flex: 1;
+    display: grid;
+    grid-template-columns: repeat(7, minmax(170px, 1fr));
+    grid-template-rows: 26px repeat(6, minmax(118px, 1fr));
+    gap: 8px;
+    overflow: auto;
+    padding-bottom: 4px;
+}
+
+.month-day-header {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-sub);
+    font-size: 0.82em;
+    font-weight: 800;
+    background: var(--ios-bg);
+}
+
+.month-board-cell {
+    min-height: 118px;
+    border: 1px solid var(--ios-border);
+    border-radius: 8px;
+    background: var(--ios-card-bg);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    transition: border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+}
+
+.month-board-cell.spacer {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.month-board-cell.today {
+    border-color: var(--morandi-1);
+    box-shadow: inset 0 0 0 1px var(--morandi-1);
+}
+
+.month-board-cell.has-tasks {
+    background: color-mix(in srgb, var(--ios-card-bg) 88%, var(--morandi-1-bg));
+}
+
+.month-cell-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 9px 5px;
+    cursor: pointer;
+}
+
+.month-day-number {
+    font-size: 0.95em;
+    font-weight: 850;
+    color: var(--text-primary);
+}
+
+.month-day-stats {
+    color: var(--text-sub);
+    font-size: 0.76em;
+    font-weight: 800;
+}
+
+.month-progress {
+    height: 3px;
+    margin: 0 9px 6px;
+    background: rgba(128, 128, 128, 0.14);
+    border-radius: 4px;
+    overflow: hidden;
+}
+
+.month-task-list {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 0 7px 8px;
+    overflow: hidden;
+}
+
+.month-task-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-height: 22px;
+    padding: 2px 6px;
+    border-radius: 5px;
+    background: var(--background-primary);
+    border-left: 3px solid var(--morandi-1);
+    color: var(--text-primary);
+    font-size: 0.78em;
+    font-weight: 650;
+    line-height: 1.25;
+}
+
+.month-task-chip span:last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.month-task-chip.done {
+    opacity: 0.55;
+    text-decoration: line-through;
+}
+
+.month-task-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 50%;
+    background: currentColor;
+    flex: 0 0 auto;
+}
+
+.month-more-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-accent);
+    cursor: pointer;
+    font-size: 0.76em;
+    font-weight: 800;
+    padding: 2px 4px;
+    text-align: left;
+}
+
+@media (max-width: 980px) {
+    .dashboard-toolbar {
+        flex-wrap: wrap;
+    }
+
+    .dashboard-toolbar .quick-add-bar {
+        order: 5;
+        flex-basis: 100%;
+    }
+
+    .month-board-grid {
+        grid-template-columns: repeat(7, minmax(150px, 1fr));
+    }
 }

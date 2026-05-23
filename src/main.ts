@@ -1,5 +1,5 @@
 /* eslint-disable obsidianmd/ui/sentence-case */
-import { Plugin, ItemView, WorkspaceLeaf, TFile, Notice } from 'obsidian';
+import { Plugin, ItemView, WorkspaceLeaf, TFile, Notice, MarkdownView } from 'obsidian';
 import { createRoot, Root } from 'react-dom/client';
 import * as React from 'react';
 import { ICalendarSettings, DEFAULT_SETTINGS, ICalendarSettingTab } from './settings';
@@ -12,7 +12,7 @@ const REGEX = {
     DONE_DATE: /✅\s*(\d{4}-\d{2}-\d{2})/u,
     TAG: /#[\w\u4e00-\u9fa5/]+/g,
     PRIORITY: /(?:🔺|⏫|🔼|🔽|⏬)/gu,
-    TASK_MARKER: /-\s\[([\sxX])\]/
+    TASK_MARKER: /-\s\[([\sxX-])\]/
 };
 
 const PRIO_ICONS: Record<number, string> = { 5: '🔺', 4: '⏫', 3: '🔼', 1: '🔽', 0: '⏬' };
@@ -20,7 +20,7 @@ const PRIO_ICONS: Record<number, string> = { 5: '🔺', 4: '⏫', 3: '🔼', 1: 
 export interface TaskItem {
     content: string;
     date: string | null;
-    type: 'todo' | 'done';
+    type: 'todo' | 'done' | 'cancelled';
     priority: number;
     path: string;
     line: number;
@@ -115,6 +115,11 @@ export default class ICalendarPlugin extends Plugin {
     settings!: ICalendarSettings; 
     private taskCache: Map<string, TaskItem[]> = new Map();
 
+    private normalizeMarkdownPath(path: string): string {
+        const normalizedPath = path.trim().replace(/\\/g, '/');
+        return normalizedPath.endsWith('.md') ? normalizedPath : `${normalizedPath}.md`;
+    }
+
     async onload(): Promise<void> {
         await this.loadSettings();
 
@@ -160,18 +165,20 @@ export default class ICalendarPlugin extends Plugin {
         const fileDate = page.file.day ? page.file.day.toISODate() : null;
 
         for (const t of page.file.tasks) {
-            const parsedTask = this.parseDataviewTask(t, page.file.name, fileDate, page.file.path);
+            const parsedTask = this.parseDataviewTask(t, page.file.name, fileDate);
             if (parsedTask) fileTasks.push(parsedTask);
         }
         
         this.taskCache.set(page.file.path, fileTasks);
     }
 
-    private parseDataviewTask(t: DataviewTask, fileName: string, fileDate: string | null, filePath: string): TaskItem | null {
+    private parseDataviewTask(t: DataviewTask, fileName: string, fileDate: string | null): TaskItem | null {
         let taskDate: string | null = null;
-        const type: 'todo' | 'done' = t.completed ? 'done' : 'todo';
+        const statusMatch = t.text.match(REGEX.TASK_MARKER);
+        const statusMarker = statusMatch?.[1] || ' ';
+        const type: TaskItem['type'] = statusMarker === '-' ? 'cancelled' : (t.completed ? 'done' : 'todo');
 
-        if (t.completed) {
+        if (type === 'done') {
             const cMatch = t.text.match(REGEX.DONE_DATE);
             taskDate = cMatch?.[1] || (t.completion ? window.moment(t.completion).format('YYYY-MM-DD') : null);
         } else {
@@ -181,17 +188,17 @@ export default class ICalendarPlugin extends Plugin {
 
         if (!taskDate && fileDate) taskDate = fileDate;
         
-        // 🌟 核心引擎修改：允许收纳箱中的无日期任务穿透拦截
-        const isInboxTask = filePath === this.settings.inboxFilePath;
-        if (!taskDate && !isInboxTask) return null; 
-
         const rawText = t.text;
         let priorityLevel = 2;
         const prioMatch = rawText.match(REGEX.PRIORITY);
         if (prioMatch) {
             const icon = prioMatch[0];
-            priorityLevel = Object.keys(PRIO_ICONS).find(k => PRIO_ICONS[Number(k)] === icon) ? Number(Object.keys(PRIO_ICONS).find(k => PRIO_ICONS[Number(k)] === icon)) : 2;
+            const priorityKey = Object.keys(PRIO_ICONS).find(k => PRIO_ICONS[Number(k)] === icon);
+            priorityLevel = priorityKey ? Number(priorityKey) : 2;
         }
+
+        let hash = 0;
+        for (let i = 0; i < fileName.length; i++) hash += fileName.charCodeAt(i);
 
         return {
             content: this.cleanTaskText(rawText),
@@ -201,7 +208,7 @@ export default class ICalendarPlugin extends Plugin {
             path: t.path,
             line: t.line,
             fileName,
-            colorIndex: (fileName.length % 3) + 1,
+            colorIndex: (hash % 3) + 1,
             tags: rawText.match(REGEX.TAG) || [],
             originalText: rawText
         };
@@ -218,6 +225,19 @@ export default class ICalendarPlugin extends Plugin {
 
     async getTasksFromCache(): Promise<TaskItem[]> {
         return Array.from(this.taskCache.values()).flat();
+    }
+
+    async openTaskLocation(task: TaskItem): Promise<void> {
+        await this.app.workspace.openLinkText(task.path, '', false, { active: true });
+
+        const leaf = this.app.workspace.getActiveViewOfType(MarkdownView);
+        if (!leaf) return;
+
+        const position = { line: task.line, ch: 0 };
+        leaf.setEphemeralState({ line: task.line });
+        leaf.editor.setCursor(position);
+        leaf.editor.scrollIntoView({ from: position, to: position }, true);
+        leaf.editor.focus();
     }
 
     async activateView(): Promise<void> {
@@ -257,75 +277,12 @@ export default class ICalendarPlugin extends Plugin {
         const dv = this.getDataviewAPI();
         if (!dv) return [];
 
-        const allTasks: TaskItem[] = [];
         const pages = dv.pages('""');
 
         for (const page of pages) {
-            if (!page.file.tasks) continue;
-            
-            const fileDate = page.file.day ? page.file.day.toISODate() : null;
-
-            for (const t of page.file.tasks) {
-                let taskDate: string | null = null;
-                let type: 'todo' | 'done' = 'todo';
-
-                if (t.completed) {
-                    type = 'done';
-                    const cMatch = t.text.match(/✅\s*(\d{4}-\d{2}-\d{2})/);
-                    if (cMatch && cMatch[1]) {
-                        taskDate = cMatch[1];
-                    } else if (t.completion) {
-                        taskDate = window.moment(t.completion).format('YYYY-MM-DD');
-                    }
-                } else {
-                    const dMatch = t.text.match(/(?:📅|⏳|🛫)\s*(\d{4}-\d{2}-\d{2})/);
-                    if (dMatch && dMatch[1]) {
-                        taskDate = dMatch[1];
-                    }
-                }
-
-                if (!taskDate && fileDate) taskDate = fileDate;
-
-                // 🌟 核心引擎修改：兼容初次拉取时的收纳箱任务穿透
-                const isInboxTask = t.path === this.settings.inboxFilePath;
-
-                if (taskDate || isInboxTask) {
-                    const rawText = t.text;
-                    let priorityLevel = 2; 
-                    if (rawText.includes('🔺')) priorityLevel = 5;
-                    else if (rawText.includes('⏫')) priorityLevel = 4;
-                    else if (rawText.includes('🔼')) priorityLevel = 3;
-                    else if (rawText.includes('🔽')) priorityLevel = 1;
-                    else if (rawText.includes('⏬')) priorityLevel = 0;
-
-                    const tags = rawText.match(/#[\w\u4e00-\u9fa5/]+/g) || [];
-                
-                    const cleanContent = rawText
-                        .replace(/(?:✅|📅|⏳|🛫)\s*\d{4}-\d{2}-\d{2}/gu, '') 
-                        .replace(/#[\w\u4e00-\u9fa5/]+/g, '')
-                        .replace(/(?:🔺|⏫|🔼|🔽|⏬)/gu, '') 
-                        .trim();
-                    
-                    let hash = 0;
-                    for (let i = 0; i < page.file.name.length; i++) hash += page.file.name.charCodeAt(i);
-                    const colorIndex = (hash % 3) + 1;
-
-                    allTasks.push({
-                        content: cleanContent || "未命名任务",
-                        date: taskDate,
-                        type,
-                        priority: priorityLevel,
-                        path: t.path,
-                        line: t.line, 
-                        fileName: page.file.name,
-                        colorIndex,
-                        tags,
-                        originalText: rawText
-                    });
-                }
-            }
+            this.updateFileCache(page);
         }
-        return allTasks;
+        return this.getTasksFromCache();
     }
 
     // 🌟 全新收纳箱追加接口（自动创建目录与文件）
@@ -349,8 +306,7 @@ export default class ICalendarPlugin extends Plugin {
     }
 
     async appendTaskToInbox(text: string): Promise<void> {
-        let inboxPath = this.settings.inboxFilePath.trim();
-        if (!inboxPath.endsWith('.md')) inboxPath += '.md';
+        const inboxPath = this.normalizeMarkdownPath(this.settings.inboxFilePath);
         
         await this.ensureFolderExists(inboxPath);
         

@@ -42,6 +42,9 @@ type DataviewMetadataCache = {
     offref(ref: unknown): void;
 };
 
+type MoveScope = 'all' | 'overdue' | 'unplanned';
+type TaskGroups = Record<string, TaskItem[]>;
+
 const PRIORITY_MAP: Record<number, { label: string, classId: number, icon: string }> = {
     5: { label: '最高', classId: 5, icon: '🔺' },
     4: { label: '高', classId: 4, icon: '⏫' },
@@ -69,6 +72,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
     const [quickAddText, setQuickAddText] = useState('');
     const [isAddingTask, setIsAddingTask] = useState(false);
     const [showInbox, setShowInbox] = useState(false);
+    const [activeInboxFile, setActiveInboxFile] = useState<string | null>(null);
+
+    const todayStr = window.moment().format('YYYY-MM-DD');
 
     useEffect(() => {
         let isMounted = true;
@@ -123,28 +129,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
 
     const sortedTasks = useMemo(() => {
         return [...tasks].sort((a, b) => {
-            if (a.type !== b.type) return a.type === 'done' ? 1 : -1;
+            const typeOrder: Record<TaskItem['type'], number> = { todo: 0, done: 1, cancelled: 2 };
+            if (a.type !== b.type) return typeOrder[a.type] - typeOrder[b.type];
             if (a.priority !== b.priority) return b.priority - a.priority;
             return a.fileName.localeCompare(b.fileName);
         });
     }, [tasks]);
 
-    // 🌟 核心分流：分离收纳箱任务与日历任务
-    // 收纳箱任务：路径匹配设置，且完全没有分配日期的 todo 任务
     const inboxTasks = useMemo(() => {
-        const inboxPath = plugin.settings.inboxFilePath.endsWith('.md') 
-            ? plugin.settings.inboxFilePath 
-            : `${plugin.settings.inboxFilePath}.md`;
-        return sortedTasks.filter(t => t.path === inboxPath && !t.date && t.type === 'todo');
-    }, [sortedTasks, plugin.settings.inboxFilePath]);
+        return sortedTasks.filter(t => !t.date && t.type === 'todo');
+    }, [sortedTasks]);
 
-    // 日历任务：排除了纯收纳箱任务的其余任务
     const calendarTasks = useMemo(() => {
-        const inboxPath = plugin.settings.inboxFilePath.endsWith('.md') 
-            ? plugin.settings.inboxFilePath 
-            : `${plugin.settings.inboxFilePath}.md`;
-        return sortedTasks.filter(t => !(t.path === inboxPath && !t.date));
-    }, [sortedTasks, plugin.settings.inboxFilePath]);
+        return sortedTasks.filter(t => Boolean(t.date) && t.type !== 'cancelled');
+    }, [sortedTasks]);
+
+    const overdueTasks = useMemo(() => {
+        return calendarTasks.filter(t => t.type === 'todo' && t.date && window.moment(t.date).isBefore(todayStr, 'day'));
+    }, [calendarTasks, todayStr]);
 
     const allVisibleTasksTags = useMemo(() => {
         const startOfView = currentDate.clone().startOf(viewMode);
@@ -165,6 +167,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
 
     const memoizedFilteredTasks = useMemo(() => {
         return calendarTasks.filter(t => {
+            if (t.type === 'cancelled') return false;
             if (!showCompleted && t.type === 'done') return false;
             
             if (filterEnabled && selectedTags.length > 0) {
@@ -182,10 +185,11 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
     }, [calendarTasks, showCompleted, filterEnabled, selectedTags, filterType]);
 
     const calculateWeightedProgress = (targetTasks: TaskItem[]) => {
-        const totalWeight = targetTasks.reduce((acc, t) => acc + (plugin.settings.priorityWeights[t.priority] ?? 1), 0);
+        const activeTasks = targetTasks.filter(t => t.type !== 'cancelled');
+        const totalWeight = activeTasks.reduce((acc, t) => acc + (plugin.settings.priorityWeights[t.priority] ?? 1), 0);
         if (totalWeight === 0) return { totalWeight, doneWeight: 0, percent: 0, doneCount: 0, totalCount: 0 };
         
-        const doneTasks = targetTasks.filter(t => t.type === 'done');
+        const doneTasks = activeTasks.filter(t => t.type === 'done');
         const doneWeight = doneTasks.reduce((acc, t) => acc + (plugin.settings.priorityWeights[t.priority] ?? 1), 0);
         
         return {
@@ -193,7 +197,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
             doneWeight,
             percent: Math.round((doneWeight / totalWeight) * 100),
             doneCount: doneTasks.length,
-            totalCount: targetTasks.length
+            totalCount: activeTasks.length
         };
     };
 
@@ -261,6 +265,50 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         }
     };
 
+    const moveTaskToDate = async (task: TaskItem, dateStr: string) => {
+        const originalTaskState = { ...task };
+        setTasks(prev => prev.map(t => (t.path === task.path && t.line === task.line) ? { ...t, date: dateStr } : t));
+        try {
+            await plugin.updateTaskMetadata(task, dateStr, null);
+            showUndoNotice("任务已移动", originalTaskState);
+        } catch (err) {
+            setTasks(prev => prev.map(t => (t.path === originalTaskState.path && t.line === originalTaskState.line) ? originalTaskState : t));
+            console.error("Move task failed:", err);
+            createNotice("移动失败，请检查任务所在文件是否可写");
+        }
+    };
+
+    const handleTaskDateChange = async (task: TaskItem, value: string) => {
+        if (!value) return;
+        await moveTaskToDate(task, value);
+    };
+
+    const moveTasksToDate = async (targetTasks: TaskItem[], dateStr: string, scope: MoveScope) => {
+        if (targetTasks.length === 0) {
+            createNotice("没有需要移动的任务");
+            return;
+        }
+
+        const originalTasks = targetTasks.map(task => ({ ...task }));
+        const targetKeys = new Set(targetTasks.map(task => `${task.path}:${task.line}`));
+        setTasks(prev => prev.map(task => targetKeys.has(`${task.path}:${task.line}`) ? { ...task, date: dateStr } : task));
+
+        try {
+            for (const task of targetTasks) {
+                await plugin.updateTaskMetadata(task, dateStr, null);
+            }
+            const scopeText = scope === 'overdue' ? '逾期任务' : (scope === 'unplanned' ? '未安排任务' : '任务');
+            createNotice(`${targetTasks.length} 个${scopeText}已移动到 ${dateStr}`);
+        } catch (err) {
+            setTasks(prev => prev.map(task => {
+                const originalTask = originalTasks.find(item => item.path === task.path && item.line === task.line);
+                return originalTask || task;
+            }));
+            console.error("Batch move failed:", err);
+            createNotice("批量移动失败，部分文件可能不可写");
+        }
+    };
+
     const showUndoNotice = (message: string, originalState: TaskItem) => {
         const notice = createNotice("", 5000); 
         const container = notice.messageEl;
@@ -291,6 +339,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
     };
 
     const handleCheckboxClick = async (task: TaskItem) => {
+        if (task.type === 'cancelled') return;
+
         setTasks(prev => prev.map(t => {
             if(t.path === task.path && t.line === task.line) {
                 return { ...t, type: t.type === 'todo' ? 'done' : 'todo' };
@@ -298,6 +348,100 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
             return t;
         }));
         await plugin.toggleTask(task);
+    };
+
+    const handleOpenTask = async (event: React.MouseEvent<HTMLElement>, task: TaskItem) => {
+        event.preventDefault();
+        event.stopPropagation();
+        try {
+            await plugin.openTaskLocation(task);
+        } catch (err) {
+            console.error("Open task location failed:", err);
+            createNotice("无法打开任务所在位置");
+        }
+    };
+
+    const renderTaskActions = (task: TaskItem, variant: 'mini' | 'full' = 'mini') => (
+        <div className={`task-actions ${variant === 'full' ? 'task-actions-full' : ''}`}>
+            <button
+                className="task-action-btn"
+                title="移动到今天"
+                onClick={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    void moveTaskToDate(task, todayStr);
+                }}
+            >
+                今天
+            </button>
+            <input
+                className="task-date-picker"
+                type="date"
+                title="移动到指定日期"
+                value={task.date || ''}
+                onClick={(e) => e.stopPropagation()}
+                onChange={(e) => {
+                    e.stopPropagation();
+                    void handleTaskDateChange(task, e.currentTarget.value);
+                }}
+            />
+        </div>
+    );
+
+    const renderMiniTaskCard = (task: TaskItem, key: string, showDate = false) => {
+        const cardBorderClass = groupMode === 'priority'
+            ? (task.type === 'done' ? 'prio-group-done' : `priority-level-${task.priority}`)
+            : `accent-type-${task.colorIndex}`;
+
+        return (
+            <div key={key} className={`mini-task ${task.type} ${cardBorderClass}`} draggable onDragStart={e => handleDragStart(e, task)} onDragEnd={handleDragEnd}>
+                <div className="mini-task-main-row">
+                    <a className="internal-link-wrapper internal-link" data-href={task.path} href={task.path}>
+                        <div className="mini-task-content" style={{textDecoration: task.type === 'done' ? 'line-through' : 'none'}}>
+                            {PRIORITY_MAP[task.priority]?.icon && `${PRIORITY_MAP[task.priority]?.icon} `}{task.content}
+                        </div>
+                    </a>
+                    <button
+                        className={`mini-task-check ${task.type === 'done' ? 'checked' : ''}`}
+                        title={task.type === 'done' ? '标记为未完成' : '标记为完成'}
+                        onClick={(e) => {
+                            e.preventDefault();
+                            e.stopPropagation();
+                            void handleCheckboxClick(task);
+                        }}
+                    >
+                        ✓
+                    </button>
+                </div>
+                <div className="tag-container" style={{marginTop: '2px'}}>
+                    <div className="task-tag file-tag">{task.fileName}</div>
+                    {showDate && task.date && <div className="task-tag">{window.moment(task.date).format('M.D')}</div>}
+                    {task.tags.map((tag, i) => <div key={i} className="task-tag">{tag}</div>)}
+                </div>
+                {task.type === 'todo' && renderTaskActions(task)}
+            </div>
+        );
+    };
+
+    const renderInboxGroups = () => {
+        if (inboxTasks.length === 0) {
+            return <div className="inbox-empty-state">目前没有未安排任务</div>;
+        }
+
+        const groups: Record<string, TaskItem[]> = {};
+        inboxTasks.forEach(task => {
+            if (!groups[task.fileName]) groups[task.fileName] = [];
+            groups[task.fileName]?.push(task);
+        });
+
+        return Object.entries(groups)
+            .sort((a, b) => a[0].localeCompare(b[0]))
+            .map(([fileName, groupTasks]) => (
+                <div key={fileName} className="inbox-file-group">
+                    <div className="inbox-file-header">{fileName}<span>{groupTasks.length}</span></div>
+                    {groupTasks.map((task, idx) => renderMiniTaskCard(task, `inbox-${task.path}-${task.line}-${idx}`))}
+                </div>
+            ));
     };
 
     const getPerformanceEmoji = (percent: number) => {
@@ -409,6 +553,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                                             {(groupMode === 'priority' || isDoneGroup) && <div className="task-tag file-tag">{t.fileName}</div>}
                                             {t.tags.map((tag, i) => <div key={i} className="task-tag">{tag}</div>)}
                                         </div>
+                                        {t.type === 'todo' && renderTaskActions(t, 'full')}
                                     </div>
                                 </div>
                             ))}
@@ -502,29 +647,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                             return (
                                 <div key={key} className={`week-file-group ${isDoneGroup ? 'prio-group-done' : ''}`}>
                                     <div className="week-file-header">{headerText}</div>
-                                    {groupTasks.map((t, idx) => {
-                                        const cardBorderClass = groupMode === 'priority' 
-                                            ? (isDoneGroup ? 'prio-group-done' : `priority-level-${t.priority}`) 
-                                            : `accent-type-${t.colorIndex}`;
-                                        
-                                        return (
-                                            <div key={`${t.path}-${t.line}-${idx}`} className={`mini-task ${t.type} ${cardBorderClass}`} draggable onDragStart={e => handleDragStart(e, t)} onDragEnd={handleDragEnd}>
-                                                <div 
-                                                    style={{position: 'absolute', left: '-6px', top: '8px', cursor: 'pointer', zIndex: 10}}
-                                                    onClick={(e) => { e.stopPropagation(); void handleCheckboxClick(t); }}
-                                                ></div>
-                                                <a className="internal-link-wrapper internal-link" data-href={t.path} href={t.path}>
-                                                    <div className="mini-task-content" style={{textDecoration: t.type === 'done' ? 'line-through' : 'none'}}>
-                                                        {!isDoneGroup && groupMode !== 'priority' && PRIORITY_MAP[t.priority]?.icon && `${PRIORITY_MAP[t.priority]?.icon} `}{t.content}
-                                                    </div>
-                                                </a>
-                                                <div className="tag-container" style={{marginTop: '2px'}}>
-                                                    {(groupMode === 'priority' || isDoneGroup) && <div className="task-tag file-tag">{t.fileName}</div>}
-                                                    {t.tags.map((tag, i) => <div key={i} className="task-tag">{tag}</div>)}
-                                                </div>
-                                            </div>
-                                        )
-                                    })}
+                                    {groupTasks.map((t, idx) => renderMiniTaskCard(t, `${t.path}-${t.line}-${idx}`))}
                                 </div>
                             );
                         })}
@@ -546,73 +669,76 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         const daysInMonth = currentDate.daysInMonth();
         const startDay = startOfMonth.day(); 
 
-        const monthTasks = calendarTasks.filter(t => t.date && window.moment(t.date).isSame(currentDate, 'month'));
-        
-        const dailyWeights = Array.from({length: daysInMonth}, (_, i) => {
-            const dateStr = startOfMonth.clone().add(i, 'days').format('YYYY-MM-DD');
-            const dTasks = monthTasks.filter(t => t.date === dateStr);
-            return dTasks.filter(t => t.type === 'done').reduce((acc, t) => acc + (plugin.settings.priorityWeights[t.priority] ?? 1), 0);
-        });
-
-        const maxDailyWeight = dailyWeights.length > 0 ? Math.max(...dailyWeights, 1) : 1;
-
+        const monthTasks = memoizedFilteredTasks.filter(t => t.date && window.moment(t.date).isSame(currentDate, 'month'));
+        const monthProgress = calculateWeightedProgress(monthTasks);
         const cells = [];
-        for (let i = 0; i < startDay; i++) cells.push(<div key={`spacer-${i}`} className="calendar-cell spacer" />);
+        for (let i = 0; i < startDay; i++) cells.push(<div key={`spacer-${i}`} className="month-board-cell spacer" />);
 
         for (let day = 1; day <= daysInMonth; day++) {
             const dateStr = currentDate.clone().date(day).format('YYYY-MM-DD');
             const dayTasks = monthTasks.filter(t => t.date === dateStr); 
-            const taskCount = dayTasks.length;
-            
-            const doneWeight = dayTasks.filter(t => t.type === 'done').reduce((acc, t) => acc + (plugin.settings.priorityWeights[t.priority] ?? 1), 0);
-            const normalizedWeight = Math.min(1, doneWeight / maxDailyWeight);
-            
-            let cellStyle: React.CSSProperties = {};
-            let isDarkBg = false;
-            
-            if (doneWeight > 0) {
-                const alpha = Math.max(0.15, normalizedWeight); 
-                cellStyle.backgroundColor = `rgba(106, 142, 174, ${alpha})`;
-                cellStyle.borderColor = 'transparent'; 
-                
-                if (alpha > 0.6) {
-                    cellStyle.color = 'white';
-                    isDarkBg = true;
-                }
-            }
+            const { percent: dPercent, doneCount: dDone, totalCount: dTotal } = calculateWeightedProgress(dayTasks);
+            const isToday = dateStr === todayStr;
+            const previewTasks = dayTasks.slice(0, 4);
 
             cells.push(
                 <div 
                     key={dateStr} 
-                    className={`calendar-cell ${dateStr === currentDate.format('YYYY-MM-DD') ? 'selected' : ''}`} 
-                    style={cellStyle}
-                    title={`${dateStr}: 效能得分 ${doneWeight} / 共 ${taskCount} 件`}
-                    onClick={() => setCurrentDate(window.moment(dateStr))}
+                    className={`month-board-cell ${isToday ? 'today' : ''} ${dTotal > 0 ? 'has-tasks' : ''}`}
+                    onDragOver={e => { e.preventDefault(); (e.currentTarget as HTMLElement).addClass('drop-zone-active'); }}
+                    onDragLeave={e => (e.currentTarget as HTMLElement).removeClass('drop-zone-active')}
+                    onDrop={e => { (e.currentTarget as HTMLElement).removeClass('drop-zone-active'); void handleDrop(e, dateStr, null); }}
                 >
-                    <div className="day-number" style={isDarkBg ? { color: 'white' } : {}}>{day}</div>
-                    {taskCount > 0 && <div className="task-count-badge" style={isDarkBg ? { color: 'white', opacity: 1 } : {}}>{taskCount}</div>}
+                    <div className="month-cell-header" onClick={() => { setCurrentDate(window.moment(dateStr)); setViewMode('day'); }}>
+                        <div className="month-day-number">{day}</div>
+                        {dTotal > 0 && <div className="month-day-stats">{dDone}/{dTotal}</div>}
+                    </div>
+                    {dTotal > 0 && (
+                        <div className="month-progress">
+                            <div className={`progress-fill ${dPercent === 100 ? 'complete' : ''}`} style={{width: `${dPercent}%`}} />
+                        </div>
+                    )}
+                    <div className="month-task-list">
+                        {previewTasks.map((task, idx) => (
+                            <div
+                                key={`${task.path}-${task.line}-${idx}`}
+                                className={`month-task-chip ${task.type === 'done' ? 'done' : ''} priority-level-${task.priority}`}
+                                draggable
+                                onDragStart={e => handleDragStart(e, task)}
+                                onDragEnd={handleDragEnd}
+                                title={`${task.fileName}: ${task.content}`}
+                            >
+                                <span className="month-task-dot"></span>
+                                <span>{task.content}</span>
+                            </div>
+                        ))}
+                        {dayTasks.length > previewTasks.length && (
+                            <button className="month-more-btn" onClick={() => { setCurrentDate(window.moment(dateStr)); setViewMode('day'); }}>
+                                +{dayTasks.length - previewTasks.length} 更多
+                            </button>
+                        )}
+                    </div>
                 </div>
             );
         }
 
         return (
-            <div className="month-layout-wrapper">
-                <div className="month-sidebar">
-                    <div className="calendar-grid">
-                        {['日', '一', '二', '三', '四', '五', '六'].map(d => (<div key={d} className="calendar-day-header">{d}</div>))}
-                        {cells}
+            <div className="month-board-wrapper">
+                <div className="month-board-summary">
+                    <div>
+                        <div className="insights-title">月度安排</div>
+                        <div className="month-summary-meta">{monthProgress.doneCount}/{monthProgress.totalCount} 完成 · {inboxTasks.length} 未安排</div>
                     </div>
-                    <div className="heatmap-legend">
-                        <span>少</span>
-                        <div className="calendar-cell" style={{backgroundColor: 'rgba(106, 142, 174, 0.15)', borderColor: 'transparent'}}></div>
-                        <div className="calendar-cell" style={{backgroundColor: 'rgba(106, 142, 174, 0.4)', borderColor: 'transparent'}}></div>
-                        <div className="calendar-cell" style={{backgroundColor: 'rgba(106, 142, 174, 0.7)', borderColor: 'transparent'}}></div>
-                        <div className="calendar-cell" style={{backgroundColor: 'rgba(106, 142, 174, 1.0)', borderColor: 'transparent'}}></div>
-                        <span>多</span>
+                    <div className="month-summary-progress">
+                        <span>{monthProgress.percent}%</span>
+                        <div className="progress-container">
+                            <div className={`progress-fill ${monthProgress.percent === 100 ? 'complete' : ''}`} style={{width: `${monthProgress.percent}%`}} />
+                        </div>
                     </div>
                 </div>
-                <div className="month-main-content">
-                    {renderDailyList(currentDate.format('YYYY-MM-DD'))}
+                <div className="month-board-grid">
+                    {['日', '一', '二', '三', '四', '五', '六'].map(d => (<div key={d} className="month-day-header">{d}</div>))}
+                    {cells}
                 </div>
             </div>
         );
@@ -635,79 +761,65 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
             {/* 🌟 悬浮收纳箱侧栏 */}
             <div className={`inbox-drawer ${showInbox ? 'open' : ''}`}>
                 <div className="inbox-drawer-header">
-                    <h3>📥 收纳箱</h3>
+                    <h3>📥 未安排任务</h3>
                     <button className="inbox-close-btn" onClick={() => setShowInbox(false)}>✖</button>
                 </div>
                 <div className="inbox-drawer-content">
-                    {inboxTasks.length === 0 ? (
-                        <div className="inbox-empty-state">目前没有待处理任务</div>
-                    ) : (
-                        inboxTasks.map((t, idx) => (
-                            <div 
-                                key={`inbox-${idx}`} 
-                                className="mini-task accent-type-1" 
-                                draggable 
-                                onDragStart={e => handleDragStart(e, t)} 
-                                onDragEnd={handleDragEnd}
-                            >
-                                <a className="internal-link-wrapper internal-link" data-href={t.path} href={t.path}>
-                                    <div className="mini-task-content">
-                                        {PRIORITY_MAP[t.priority]?.icon && `${PRIORITY_MAP[t.priority]?.icon} `}{t.content}
-                                    </div>
-                                </a>
-                                <div className="tag-container" style={{marginTop: '2px'}}>
-                                    {t.tags.map((tag, i) => <div key={i} className="task-tag">{tag}</div>)}
-                                </div>
-                            </div>
-                        ))
-                    )}
+                    <div className="inbox-drawer-actions">
+                        <button className="nav-btn" onClick={() => void moveTasksToDate(inboxTasks, todayStr, 'unplanned')}>全部移到今天</button>
+                    </div>
+                    {renderInboxGroups()}
                 </div>
             </div>
 
             <div className="fixed-top-area">
-                
-                {/* 🌟 新增：全局快速输入框 */}
-                <div className="quick-add-bar">
-                    <input 
-                        className="quick-add-input"
-                        type="text" 
-                        placeholder="✨ 回车存入收纳箱... 拖拽分配至日历"
-                        value={quickAddText}
-                        onChange={e => setQuickAddText(e.target.value)}
-                        onKeyDown={e => {
-                            if (e.key === 'Enter' && !isAddingTask) void handleQuickAdd();
-                        }}
-                        disabled={isAddingTask}
-                    />
-                    <button className={`nav-btn inbox-toggle-btn ${showInbox ? 'active' : ''}`} onClick={() => setShowInbox(!showInbox)}>
-                        📥 收纳箱 <span className="inbox-badge">{inboxTasks.length}</span>
-                    </button>
-                </div>
-
-                <div className="dashboard-header">
-                    <div className="header-controls">
+                <div className="dashboard-toolbar">
+                    <div className="header-controls nav-cluster">
                         <button className="nav-btn" onClick={() => setCurrentDate(prev => prev.clone().subtract(1, viewMode === 'month' ? 'month' : (viewMode === 'week' ? 'week' : 'day')))}>❮</button>
                         <button className="nav-btn" onClick={() => setCurrentDate(prev => prev.clone().add(1, viewMode === 'month' ? 'month' : (viewMode === 'week' ? 'week' : 'day')))}>❯</button>
                         <button className="nav-btn" onClick={() => setCurrentDate(window.moment())}>今</button>
-                        <div className="dashboard-title" style={{marginLeft:'12px'}}>
-                            {viewMode === 'month' ? currentDate.format('YYYY.MM') : (viewMode === 'week' ? `${currentDate.clone().startOf('week').format('MM.DD')} - ${currentDate.clone().endOf('week').format('MM.DD')}` : currentDate.format('MM.DD dddd'))}
-                        </div>
                     </div>
-                    
+
+                    <div className="dashboard-title">
+                        {viewMode === 'month' ? currentDate.format('YYYY.MM') : (viewMode === 'week' ? `${currentDate.clone().startOf('week').format('MM.DD')} - ${currentDate.clone().endOf('week').format('MM.DD')}` : currentDate.format('MM.DD dddd'))}
+                    </div>
+
+                    <div className="quick-add-bar">
+                        <input
+                            className="quick-add-input"
+                            type="text"
+                            placeholder="回车存入收纳箱"
+                            value={quickAddText}
+                            onChange={e => setQuickAddText(e.target.value)}
+                            onKeyDown={e => {
+                                if (e.key === 'Enter' && !isAddingTask) void handleQuickAdd();
+                            }}
+                            disabled={isAddingTask}
+                        />
+                        <button className={`nav-btn inbox-toggle-btn ${showInbox ? 'active' : ''}`} onClick={() => setShowInbox(!showInbox)}>
+                            未安排 <span className="inbox-badge">{inboxTasks.length}</span>
+                        </button>
+                    </div>
+
                     <div className="right-controls">
-                        <div className="header-controls" style={{marginRight: '8px'}}>
+                        <div className="header-controls">
+                            {overdueTasks.length > 0 && (
+                                <button className="nav-btn danger" onClick={() => void moveTasksToDate(overdueTasks, todayStr, 'overdue')}>
+                                    逾期到今天 {overdueTasks.length}
+                                </button>
+                            )}
                             <button className={`nav-btn ${!showCompleted ? 'active' : ''}`} onClick={() => setShowCompleted(!showCompleted)}>
-                                {showCompleted ? '👁️ 隐已完成' : '🙈 显已完成'}
+                                {showCompleted ? '隐完成' : '显完成'}
                             </button>
                             <button className={`nav-btn ${filterEnabled ? 'active' : ''}`} onClick={() => setFilterEnabled(!filterEnabled)}>
-                                {filterEnabled ? '👁️ 正在筛选标签' : '🙈 开启标签筛选'}
+                                标签
                             </button>
                         </div>
 
                         {viewMode !== 'month' && (
                             <div className="group-switcher">
-                                <button className={`group-btn ${groupMode === 'file' ? 'active' : ''}`} onClick={() => setGroupMode('file')}>📁 项目</button>
-                                <button className={`group-btn ${groupMode === 'priority' ? 'active' : ''}`} onClick={() => setGroupMode('priority')}>🔥 优先</button>
+                                <button className={`group-btn ${groupMode === 'file' ? 'active' : ''}`} onClick={() => setGroupMode('file')}>项目</button>
+                                <button className={`group-btn ${groupMode === 'priority' ? 'active' : ''}`} onClick={() => setGroupMode('priority')}>优先</button>
                             </div>
                         )}
                         <div className="view-switcher">
