@@ -379,9 +379,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
             >
                 {variant === 'mini' ? '今' : '今天'}
             </button>
-            <label className="task-date-chip" title="移动到指定日期">
-                {variant === 'full' && <span className="task-date-icon">⌁</span>}
-                <span>{formatTaskDateLabel(task.date)}</span>
+            <label className="task-date-chip" title={`修改日期：${formatTaskDateLabel(task.date)}`}>
+                <span className="task-date-icon" aria-hidden="true">◷</span>
                 <input
                     className="task-date-picker"
                     type="date"

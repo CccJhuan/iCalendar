@@ -728,7 +728,7 @@
 
 .task-action-btn,
 .task-date-chip {
-    height: 21px;
+    height: 22px;
     border: 1px solid color-mix(in srgb, var(--ios-blue) 22%, transparent);
     border-radius: 999px;
     background: var(--ios-blue-soft);
@@ -758,13 +758,19 @@
     position: relative;
     cursor: pointer;
     overflow: hidden;
-    min-width: 36px;
+    width: 24px;
+    min-width: 24px;
+    padding: 0;
 }
 
 .task-date-icon {
-    font-size: 0.9em;
-    transform: rotate(-8deg);
-    opacity: 0.75;
+    display: grid;
+    place-items: center;
+    width: 100%;
+    height: 100%;
+    font-size: 1.05em;
+    line-height: 1;
+    opacity: 0.9;
 }
 
 .task-date-picker {
@@ -791,7 +797,7 @@
 }
 
 .mini-task .task-date-chip {
-    min-width: 32px;
+    min-width: 24px;
 }
 
 .mini-task .task-action-btn {

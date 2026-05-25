@@ -564,7 +564,7 @@ export default class ICalendarPlugin extends Plugin {
             const newIcon = iconMap[finalPriority] ?? '';
             
             lineStr = lineStr.replace(prioRegex, ''); 
-            lineStr = lineStr.replace(/\s+/g, ' ').trimEnd(); 
+            lineStr = lineStr.replace(/[ \t]{2,}/g, ' ').trimEnd();
             
             if (finalPriority !== 2) { 
                 lineStr += ` ${newIcon}`;
