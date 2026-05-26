@@ -19,7 +19,7 @@ const getObsidian = (): ObsidianModule | undefined => {
     if (typeof globalWin.require !== 'function') return undefined;
     try {
         return globalWin.require('obsidian') as ObsidianModule;
-    } catch (_) {
+    } catch {
         return undefined; // 消除 e 未使用的报错
     }
 };
