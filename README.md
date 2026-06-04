@@ -1,90 +1,98 @@
-# Obsidian Sample Plugin
+# iCalendar
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+[中文](README.md) | [English](README.en.md)
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+iCalendar 是一个面向 Obsidian 的本地日程管理插件。它会读取库中的 Markdown 任务，把带日期的任务整理成月视图、周视图和日视图，并提供未安排任务收纳箱、拖拽排程、优先级调整、标签筛选和今日任务提醒。
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open modal (simple)" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and output 'click' to the console.
-- Registers a global interval which logs 'setInterval' to the console.
+插件默认在本地运行，不上传笔记内容，也不依赖云服务。
 
-## First time developing plugins?
+## 功能亮点
 
-Quick starting guide for new plugin devs:
+- 月、周、日三种视图：从总览到当天执行清单自由切换。
+- Dataview 任务聚合：自动读取库内任务，并监听 Dataview 元数据变化刷新看板。
+- 未安排任务收纳箱：没有日期的待办会集中显示，也可以通过顶部快速输入框直接写入指定收纳箱文件。
+- 拖拽排程：把任务拖到某一天即可写入或更新日期字段；也可以把逾期任务、未安排任务批量移动到今天。
+- 优先级看板：支持按文件/项目或按优先级分组，并可拖到优先级栏快速调整任务优先级。
+- 进度追踪：按日、周、月统计完成进度；可在设置中为不同优先级配置效能权重。
+- 标签筛选：在当前视图中按标签包含、全部包含或排除筛选任务。
+- 任务完成与撤销：在看板中勾选任务会同步修改原 Markdown 行，并提供短时撤销入口。
+- 今日任务提醒：可设置 3 个提醒时间，弹窗列出今天尚未完成的任务。
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `main.ts` to `main.js`.
-- Make changes to `main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+## 依赖与兼容性
 
-## Releasing new releases
+- 必需：Obsidian 与 Dataview 插件。iCalendar 通过 Dataview API 读取任务数据。
+- 推荐：Tasks 插件。安装后，iCalendar 会优先调用 Tasks API 完成任务切换；未安装时会使用内置的简单切换逻辑。
+- 支持桌面与移动端加载，但高密度日历看板更适合桌面或较大屏幕使用。
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+## 任务格式
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
+iCalendar 读取 Markdown 任务行，并识别常见的 Tasks/Dataview 风格标记：
 
-## Adding your plugin to the community plugin list
-
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
-
-## How to use
-
-- Clone this repo.
-- Make sure your NodeJS is at least v16 (`node --version`).
-- `npm i` or `yarn` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
-
-## Manually installing the plugin
-
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
-
-## Improve code quality with eslint
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code. 
-- This project already has eslint preconfigured, you can invoke a check by running`npm run lint`
-- Together with a custom eslint [plugin](https://github.com/obsidianmd/eslint-plugin) for Obsidan specific code guidelines.
-- A GitHub action is preconfigured to automatically lint every commit on all branches.
-
-## Funding URL
-
-You can include funding URLs where people who use your plugin can financially support it.
-
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
-
-```json
-{
-    "fundingUrl": "https://buymeacoffee.com"
-}
+```markdown
+- [ ] 写周报 📅 2026-06-05 🔼 #work
+- [ ] 准备会议 ⏳ 2026-06-06 ⏫ #project/a
+- [ ] 出发去机场 🛫 2026-06-07 🔺
+- [x] 已完成任务 ✅ 2026-06-04
+- [-] 已取消任务 📅 2026-06-08
 ```
 
-If you have multiple URLs, you can also do:
+支持的日期标记：
 
-```json
-{
-    "fundingUrl": {
-        "Buy Me a Coffee": "https://buymeacoffee.com",
-        "GitHub Sponsor": "https://github.com/sponsors",
-        "Patreon": "https://www.patreon.com/"
-    }
-}
+- `📅 YYYY-MM-DD`
+- `⏳ YYYY-MM-DD`
+- `🛫 YYYY-MM-DD`
+- `✅ YYYY-MM-DD`，用于已完成任务的完成日期
+
+支持的优先级标记：
+
+- `🔺` 最高
+- `⏫` 高
+- `🔼` 中
+- 无标记为普通
+- `🔽` 低
+- `⏬` 最低
+
+如果任务没有日期，但所在文件能被 Dataview 识别为带日期的日记文件，插件会使用文件日期作为任务日期。没有日期的未完成任务会进入未安排任务收纳箱。
+
+## 使用方式
+
+1. 安装并启用 Dataview。
+2. 启用 iCalendar。
+3. 通过左侧日历图标或命令面板中的 **Open calendar view** 打开看板。
+4. 在顶部切换 **月**、**周**、**日** 视图。
+5. 使用快速输入框创建任务，或从未安排任务抽屉中把任务拖到日历日期。
+
+## 设置项
+
+在 **Settings → Community plugins → iCalendar** 中可以配置：
+
+- 任务收纳箱路径：快速输入框创建的任务会写入此 Markdown 文件，默认 `Inbox.md`。
+- 默认视图：打开看板时显示月视图、周视图或日视图。
+- 默认分组模式：周视图/日视图中按文件项目或优先级归类。
+- 任务显示密度：标准或紧凑。
+- 今日任务提醒：开启提醒，并设置最多 3 个 24 小时制提醒时间。
+- 效能权重：为不同优先级设置进度统计权重。
+
+## 数据与隐私
+
+iCalendar 只读写当前 Obsidian 库中的 Markdown 文件：
+
+- 读取任务数据依赖 Dataview 本地索引。
+- 快速添加任务只写入你配置的收纳箱文件。
+- 拖拽排程、完成任务、修改优先级会更新任务所在的原始 Markdown 行。
+- 插件不包含遥测、广告、远程脚本或自动更新逻辑。
+
+## 本地开发
+
+```bash
+npm install
+npm run dev
 ```
 
-## API Documentation
+生产构建：
 
-See https://docs.obsidian.md
+```bash
+npm run build
+```
+
+发布或手动安装时，需要将 `main.js`、`manifest.json` 和 `styles.css` 放在对应的 Obsidian 插件目录中。
