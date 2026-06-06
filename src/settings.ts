@@ -1,5 +1,6 @@
 import { App, PluginSettingTab, Setting } from 'obsidian';
 import type ICalendarPlugin from './main';
+import { normalizeTagList } from './calendar-utils';
 
 export interface ICalendarSettings {
     defaultView: 'month' | 'week' | 'day';
@@ -7,6 +8,8 @@ export interface ICalendarSettings {
     taskDensity: 'standard' | 'compact';
     priorityWeights: Record<number, number>;
     inboxFilePath: string; // 🌟 新增：收纳箱文件路径
+    inboxSidebarWidth: number;
+    ddlTags: string[];
     taskReminderEnabled: boolean;
     taskReminderTimes: string[];
 }
@@ -17,6 +20,8 @@ export const DEFAULT_SETTINGS: ICalendarSettings = {
     taskDensity: 'standard',
     priorityWeights: { 5: 1, 4: 1, 3: 1, 2: 1, 1: 1, 0: 1 },
     inboxFilePath: 'Inbox.md', // 🌟 默认路径
+    inboxSidebarWidth: 360,
+    ddlTags: ['#DDL', '#deadline'],
     taskReminderEnabled: false,
     taskReminderTimes: ['09:00', '14:00', '20:00']
 }
@@ -77,13 +82,25 @@ export class ICalendarSettingTab extends PluginSettingTab {
 
         new Setting(containerEl)
             .setName('任务显示密度')
-            .setDesc('调整周视图/日视图中单个任务卡片的大小与信息密度')
+            .setDesc('调整月视图、周视图、日视图和未安排任务侧栏的信息密度')
             .addDropdown(drop => drop
                 .addOption('standard', '标准 (舒适阅读)')
                 .addOption('compact', '紧凑 (高信息密度)')
                 .setValue(this.plugin.settings.taskDensity)
                 .onChange(async (value) => {
                     this.plugin.settings.taskDensity = value as 'standard' | 'compact';
+                    await this.plugin.saveSettings();
+                })
+            );
+
+        new Setting(containerEl)
+            .setName('截止标签')
+            .setDesc('匹配这些标签的任务会在月视图当天置顶，并以时间节点样式显示。可用逗号或空格分隔，例如 #deadline, #milestone')
+            .addTextArea(text => text
+                .setPlaceholder('#deadline, #milestone')
+                .setValue(this.plugin.settings.ddlTags.join(', '))
+                .onChange(async (value) => {
+                    this.plugin.settings.ddlTags = normalizeTagList(value);
                     await this.plugin.saveSettings();
                 })
             );

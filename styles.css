@@ -57,6 +57,7 @@
     gap: 12px;
     align-items: center;
     width: 100%;
+    position: relative;
 }
 
 .quick-add-input {
@@ -74,6 +75,46 @@
     border-color: var(--morandi-1);
     box-shadow: 0 0 0 2px var(--morandi-1-bg);
     outline: none;
+}
+
+.quick-add-tag-suggestions {
+    position: absolute;
+    left: 0;
+    top: calc(100% + 6px);
+    width: min(360px, 100%);
+    max-height: 220px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px;
+    border: 1px solid var(--ios-border);
+    border-radius: 8px;
+    background: var(--background-primary);
+    box-shadow: var(--ios-shadow-soft);
+    z-index: 120;
+}
+
+.quick-add-tag-suggestion {
+    width: 100%;
+    min-height: 26px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-normal);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    padding: 4px 8px;
+    text-align: left;
+    font-size: 0.86em;
+    font-weight: 700;
+}
+
+.quick-add-tag-suggestion:hover,
+.quick-add-tag-suggestion.active {
+    background: var(--ios-blue-soft);
+    color: var(--ios-blue);
 }
 
 .inbox-toggle-btn {
@@ -1015,5 +1056,468 @@
 
     .task-actions {
         margin-left: 0;
+    }
+}
+
+/* Layout: inbox as a real sidebar instead of an overlay */
+.task-dashboard-container {
+    flex-direction: row;
+    align-items: stretch;
+    gap: 12px;
+}
+
+.calendar-main-pane {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow: hidden;
+    transition: flex-basis 0.26s ease, width 0.26s ease;
+}
+
+.inbox-sidebar {
+    flex: 0 0 0;
+    width: 0;
+    min-width: 0;
+    max-width: 0;
+    height: 100%;
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    background: var(--ios-card-bg);
+    border: 1px solid var(--ios-border);
+    border-color: transparent;
+    border-radius: 12px;
+    box-shadow: none;
+    overflow: hidden;
+    opacity: 0;
+    transform: translateX(32px);
+    pointer-events: none;
+    transition:
+        flex-basis 0.26s ease,
+        width 0.26s ease,
+        min-width 0.26s ease,
+        max-width 0.26s ease,
+        opacity 0.2s ease,
+        transform 0.26s ease,
+        border-color 0.26s ease,
+        box-shadow 0.26s ease;
+}
+
+.task-dashboard-container.inbox-open .inbox-sidebar {
+    flex-basis: var(--inbox-sidebar-width, 360px);
+    width: var(--inbox-sidebar-width, 360px);
+    min-width: 280px;
+    max-width: 560px;
+    opacity: 1;
+    transform: translateX(0);
+    pointer-events: auto;
+    border-color: var(--ios-border);
+    box-shadow: var(--ios-shadow-soft);
+}
+
+.inbox-resize-handle {
+    position: absolute;
+    left: -6px;
+    top: 0;
+    bottom: 0;
+    width: 12px;
+    cursor: col-resize;
+    z-index: 3;
+}
+
+.inbox-resize-handle::after {
+    content: "";
+    position: absolute;
+    left: 5px;
+    top: 14px;
+    bottom: 14px;
+    width: 2px;
+    border-radius: 2px;
+    background: transparent;
+}
+
+.inbox-resize-handle:hover::after {
+    background: var(--ios-blue);
+}
+
+.inbox-sidebar .inbox-drawer-header {
+    padding: 10px 12px;
+}
+
+.inbox-sidebar .inbox-drawer-header h3 {
+    font-size: 1em;
+}
+
+.inbox-sidebar .inbox-drawer-actions {
+    padding: 8px 10px 0;
+}
+
+.inbox-sidebar .inbox-drawer-body {
+    grid-template-columns: 104px minmax(0, 1fr);
+    gap: 8px;
+    padding: 10px;
+}
+
+.inbox-sidebar .inbox-drawer-content {
+    gap: 8px;
+}
+
+.inbox-sidebar .inbox-file-group {
+    gap: 6px;
+}
+
+.inbox-sidebar .inbox-file-header {
+    font-size: 0.76em;
+    padding-bottom: 3px;
+}
+
+.inbox-sidebar .mini-task {
+    padding: 6px 7px;
+    gap: 4px;
+    border-radius: 8px;
+}
+
+.inbox-sidebar .mini-task-content {
+    font-size: 0.84em;
+    line-height: 1.22;
+}
+
+.inbox-sidebar .task-tag {
+    font-size: 0.64em;
+    padding: 1px 5px;
+}
+
+.inbox-sidebar .task-action-btn,
+.inbox-sidebar .task-date-chip {
+    height: 19px;
+}
+
+.inbox-sidebar .mini-task .task-action-btn {
+    width: 20px;
+}
+
+/* Month DDL marker chips */
+.month-task-chip.ddl {
+    background: color-mix(in srgb, var(--ios-orange) 16%, var(--ios-elevated-bg));
+    border-color: color-mix(in srgb, var(--ios-orange) 44%, var(--ios-hairline));
+    border-left-color: var(--ios-orange) !important;
+    color: var(--text-primary);
+    font-weight: 800;
+}
+
+.month-ddl-badge {
+    flex: 0 0 auto;
+    border-radius: 4px;
+    padding: 1px 4px;
+    background: var(--ios-orange);
+    color: white;
+    font-size: 0.72em;
+    font-weight: 900;
+    line-height: 1.1;
+}
+
+.month-task-list {
+    overflow-y: auto;
+}
+
+.month-task-chip {
+    align-items: flex-start;
+    height: auto;
+    overflow: visible;
+}
+
+.month-task-chip .month-task-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: block;
+    overflow: visible;
+    white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    line-height: inherit;
+}
+
+.task-date-icon {
+    font-size: 0.95em;
+}
+
+/* Higher-density compact mode without truncating task content */
+.density-compact.task-dashboard-container {
+    padding: 10px;
+    gap: 8px;
+}
+
+.density-compact .calendar-main-pane {
+    gap: 7px;
+}
+
+.density-compact .fixed-top-area {
+    gap: 6px;
+    padding-bottom: 6px;
+}
+
+.density-compact .dashboard-toolbar {
+    gap: 6px;
+    min-height: 30px;
+}
+
+.density-compact .dashboard-toolbar .dashboard-title {
+    min-width: 76px;
+    font-size: 0.96em;
+}
+
+.density-compact .dashboard-toolbar .quick-add-input {
+    height: 28px;
+    padding: 3px 8px;
+    font-size: 0.84em;
+}
+
+.density-compact .dashboard-toolbar .nav-btn,
+.density-compact .dashboard-toolbar .view-btn,
+.density-compact .dashboard-toolbar .group-btn {
+    min-height: 24px;
+    padding: 2px 6px;
+    font-size: 0.78em;
+}
+
+.density-compact .priority-dock {
+    gap: 6px;
+    padding: 4px 8px;
+}
+
+.density-compact .dock-item {
+    padding: 4px 9px;
+    font-size: 0.78em;
+}
+
+.density-compact .file-groups-container {
+    grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+    gap: 8px;
+}
+
+.density-compact .file-group-card {
+    padding: 0 8px 8px;
+    gap: 5px;
+    border-radius: 10px;
+}
+
+.density-compact .file-group-header {
+    padding: 8px 0 6px;
+    font-size: 0.84em;
+}
+
+.density-compact .ios-task-item {
+    padding: 5px 7px;
+    gap: 7px;
+    border-radius: 8px;
+}
+
+.density-compact .ios-checkbox {
+    width: 17px;
+    height: 17px;
+    font-size: 9px;
+}
+
+.density-compact .task-text {
+    font-size: 0.84em;
+    line-height: 1.22;
+}
+
+.density-compact .tag-container {
+    gap: 3px;
+}
+
+.density-compact .task-tag {
+    font-size: 0.62em;
+    padding: 1px 4px;
+    line-height: 1.18;
+}
+
+.density-compact .task-actions {
+    gap: 2px;
+}
+
+.density-compact .task-action-btn,
+.density-compact .task-date-chip {
+    height: 19px;
+    font-size: 0.62em;
+}
+
+.density-compact .task-date-chip {
+    width: 21px;
+    min-width: 21px;
+}
+
+.density-compact .week-view-container {
+    gap: 7px;
+}
+
+.density-compact .weekly-insights {
+    padding: 9px 12px;
+    gap: 5px;
+    border-radius: 8px;
+}
+
+.density-compact .insights-title {
+    font-size: 0.86em;
+}
+
+.density-compact .insights-stats {
+    font-size: 1.45em;
+}
+
+.density-compact .week-view {
+    grid-template-columns: repeat(7, minmax(188px, 1fr));
+    gap: 6px;
+}
+
+.density-compact .week-col {
+    padding: 6px 6px 0;
+    border-radius: 10px;
+}
+
+.density-compact .week-col-header {
+    font-size: 0.78em;
+    padding-bottom: 6px;
+}
+
+.density-compact .week-col-tasks {
+    gap: 5px;
+    margin-top: 5px;
+}
+
+.density-compact .week-file-group {
+    gap: 4px;
+}
+
+.density-compact .week-file-header {
+    font-size: 0.7em;
+}
+
+.density-compact .mini-task {
+    padding: 5px 6px;
+    gap: 3px;
+    border-radius: 8px;
+}
+
+.density-compact .mini-task-content {
+    font-size: 0.8em;
+    line-height: 1.18;
+}
+
+.density-compact .mini-task-check {
+    width: 18px;
+    height: 18px;
+    font-size: 9px;
+}
+
+.density-compact .month-board-wrapper {
+    gap: 6px;
+}
+
+.density-compact .month-board-summary {
+    padding: 7px 9px;
+    border-radius: 10px;
+}
+
+.density-compact .month-summary-meta {
+    font-size: 0.74em;
+}
+
+.density-compact .month-summary-progress {
+    min-width: 160px;
+    gap: 7px;
+    font-size: 0.86em;
+}
+
+.density-compact .month-board-grid {
+    grid-template-columns: repeat(7, minmax(128px, 1fr));
+    grid-template-rows: 22px repeat(6, minmax(92px, 1fr));
+    gap: 5px;
+}
+
+.density-compact .month-board-cell {
+    min-height: 92px;
+    border-radius: 9px;
+}
+
+.density-compact .month-cell-header {
+    padding: 5px 6px 3px;
+}
+
+.density-compact .month-day-number {
+    font-size: 0.78em;
+}
+
+.density-compact .month-day-stats {
+    font-size: 0.66em;
+}
+
+.density-compact .month-progress {
+    height: 2px;
+    margin: 0 6px 4px;
+}
+
+.density-compact .month-task-list {
+    gap: 3px;
+    padding: 0 5px 5px;
+}
+
+.density-compact .month-task-chip {
+    min-height: 18px;
+    padding: 1px 4px;
+    gap: 3px;
+    border-radius: 6px;
+    font-size: 0.66em;
+    line-height: 1.16;
+}
+
+.density-compact .month-task-dot {
+    width: 4px;
+    height: 4px;
+}
+
+.density-compact .month-ddl-badge {
+    font-size: 0.62em;
+    padding: 1px 3px;
+}
+
+.density-compact .inbox-sidebar {
+    border-radius: 9px;
+}
+
+.density-compact .inbox-sidebar .inbox-drawer-header {
+    padding: 8px 10px;
+}
+
+.density-compact .inbox-sidebar .inbox-drawer-body {
+    grid-template-columns: 88px minmax(0, 1fr);
+    gap: 6px;
+    padding: 8px;
+}
+
+.density-compact .inbox-directory-item {
+    min-height: 24px;
+    padding: 3px 5px;
+    font-size: 0.68em;
+}
+
+@media (max-width: 980px) {
+    .task-dashboard-container {
+        flex-direction: column;
+    }
+
+    .task-dashboard-container.inbox-open .inbox-sidebar {
+        flex-basis: min(42vh, 420px);
+        width: 100%;
+        min-width: 0;
+        max-width: none;
+    }
+
+    .inbox-resize-handle {
+        display: none;
     }
 }

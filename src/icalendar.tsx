@@ -1,7 +1,17 @@
 import * as React from 'react';
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import type { TaskItem } from './main';
 import type ICalendarPlugin from './main';
+import {
+    calculateWeightedProgress,
+    completeTagAtCursor,
+    filterTagSuggestions,
+    filterVisibleTasks,
+    groupTasksByDate,
+    isDdlTask,
+    normalizeTagList,
+    sortMonthTasksForDisplay
+} from './calendar-utils';
 
 // 🌟 修复：定义严格的鸭子类型接口，彻底拒绝 any
 interface FallbackNotice {
@@ -45,6 +55,10 @@ type DataviewMetadataCache = {
 type MoveScope = 'all' | 'overdue' | 'unplanned';
 type TaskGroups = Record<string, TaskItem[]>;
 
+const INBOX_MIN_WIDTH = 280;
+const INBOX_MAX_WIDTH = 560;
+const TAG_SUGGESTION_LIMIT = 12;
+
 const PRIORITY_MAP: Record<number, { label: string, classId: number, icon: string }> = {
     5: { label: '最高', classId: 5, icon: '🔺' },
     4: { label: '高', classId: 4, icon: '⏫' },
@@ -58,6 +72,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
     const [viewMode, setViewMode] = useState<'month' | 'week' | 'day'>(plugin.settings.defaultView);
     const [groupMode, setGroupMode] = useState<'file' | 'priority'>(plugin.settings.defaultGroup);
     const [currentDate, setCurrentDate] = useState(window.moment());
+    const quickAddInputRef = useRef<HTMLInputElement | null>(null);
     
     const [tasks, setTasks] = useState<TaskItem[]>([]);
     const [isLoading, setIsLoading] = useState(true);
@@ -73,8 +88,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
     const [isAddingTask, setIsAddingTask] = useState(false);
     const [showInbox, setShowInbox] = useState(false);
     const [activeInboxFile, setActiveInboxFile] = useState<string | null>(null);
+    const [inboxSidebarWidth, setInboxSidebarWidth] = useState(() => Math.min(INBOX_MAX_WIDTH, Math.max(INBOX_MIN_WIDTH, plugin.settings.inboxSidebarWidth)));
+    const [quickAddCursor, setQuickAddCursor] = useState(0);
+    const [activeTagSuggestionIndex, setActiveTagSuggestionIndex] = useState(0);
 
     const todayStr = window.moment().format('YYYY-MM-DD');
+    const ddlTags = useMemo(() => normalizeTagList(plugin.settings.ddlTags), [plugin.settings.ddlTags]);
 
     useEffect(() => {
         let isMounted = true;
@@ -165,10 +184,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         return Object.entries(tagCountMap).sort((a, b) => b[1] - a[1]); 
     }, [calendarTasks, currentDate, viewMode]);
 
-    const memoizedFilteredTasks = useMemo(() => {
+    const tagFilteredCalendarTasks = useMemo(() => {
         return calendarTasks.filter(t => {
-            if (!showCompleted && (t.type === 'done' || t.type === 'cancelled')) return false;
-            
             if (filterEnabled && selectedTags.length > 0) {
                 const taskTags = t.tags || [];
                 if (filterType === 'any') {
@@ -181,23 +198,34 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
             }
             return true;
         });
-    }, [calendarTasks, showCompleted, filterEnabled, selectedTags, filterType]);
+    }, [calendarTasks, filterEnabled, selectedTags, filterType]);
 
-    const calculateWeightedProgress = (targetTasks: TaskItem[]) => {
-        const activeTasks = targetTasks.filter(t => t.type !== 'cancelled');
-        const totalWeight = activeTasks.reduce((acc, t) => acc + (plugin.settings.priorityWeights[t.priority] ?? 1), 0);
-        if (totalWeight === 0) return { totalWeight, doneWeight: 0, percent: 0, doneCount: 0, totalCount: 0 };
-        
-        const doneTasks = activeTasks.filter(t => t.type === 'done');
-        const doneWeight = doneTasks.reduce((acc, t) => acc + (plugin.settings.priorityWeights[t.priority] ?? 1), 0);
-        
-        return {
-            totalWeight,
-            doneWeight,
-            percent: Math.round((doneWeight / totalWeight) * 100),
-            doneCount: doneTasks.length,
-            totalCount: activeTasks.length
-        };
+    const memoizedFilteredTasks = useMemo(() => {
+        return filterVisibleTasks(tagFilteredCalendarTasks, showCompleted);
+    }, [tagFilteredCalendarTasks, showCompleted]);
+
+    const calendarTasksByDate = useMemo(() => groupTasksByDate(calendarTasks), [calendarTasks]);
+    const tagFilteredCalendarTasksByDate = useMemo(() => groupTasksByDate(tagFilteredCalendarTasks), [tagFilteredCalendarTasks]);
+    const visibleTasksByDate = useMemo(() => groupTasksByDate(memoizedFilteredTasks), [memoizedFilteredTasks]);
+
+    const quickAddTagSuggestions = useMemo(() => {
+        return filterTagSuggestions(quickAddText, quickAddCursor, plugin.getAllVaultTags(), TAG_SUGGESTION_LIMIT);
+    }, [plugin, quickAddCursor, quickAddText]);
+
+    useEffect(() => {
+        setActiveTagSuggestionIndex(0);
+    }, [quickAddText, quickAddCursor]);
+
+    const applyTagSuggestion = (tag: string) => {
+        const inputEl = quickAddInputRef.current;
+        const cursor = inputEl?.selectionStart ?? quickAddCursor;
+        const next = completeTagAtCursor(quickAddText, cursor, tag);
+        setQuickAddText(next.value);
+        setQuickAddCursor(next.cursor);
+        window.requestAnimationFrame(() => {
+            inputEl?.focus();
+            inputEl?.setSelectionRange(next.cursor, next.cursor);
+        });
     };
 
     // 🌟 新增：处理快速输入回车
@@ -208,6 +236,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         try {
             await plugin.appendTaskToInbox(text);
             setQuickAddText(''); // 清空输入框，Dataview的元数据监听会接管后续更新
+            setQuickAddCursor(0);
             createNotice("✅ 已存入收纳箱");
         } catch (e) {
             console.error("添加任务失败:", e);
@@ -215,6 +244,29 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         } finally {
             setIsAddingTask(false);
         }
+    };
+
+    const handleInboxResizeStart = (event: React.MouseEvent<HTMLDivElement>) => {
+        event.preventDefault();
+        const startX = event.clientX;
+        const startWidth = inboxSidebarWidth;
+        let latestWidth = startWidth;
+
+        const handleMouseMove = (moveEvent: MouseEvent) => {
+            const nextWidth = Math.min(INBOX_MAX_WIDTH, Math.max(INBOX_MIN_WIDTH, startWidth + startX - moveEvent.clientX));
+            latestWidth = nextWidth;
+            setInboxSidebarWidth(nextWidth);
+        };
+
+        const handleMouseUp = () => {
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mouseup', handleMouseUp);
+            plugin.settings.inboxSidebarWidth = latestWidth;
+            void plugin.saveSettings();
+        };
+
+        window.addEventListener('mousemove', handleMouseMove);
+        window.addEventListener('mouseup', handleMouseUp);
     };
 
     const handleDragStart = (e: React.DragEvent<HTMLDivElement>, task: TaskItem) => {
@@ -380,7 +432,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                 {variant === 'mini' ? '今' : '今天'}
             </button>
             <label className="task-date-chip" title={`修改日期：${formatTaskDateLabel(task.date)}`}>
-                <span className="task-date-icon" aria-hidden="true">◷</span>
+                <span className="task-date-icon" aria-hidden="true">🗓</span>
                 <input
                     className="task-date-picker"
                     type="date"
@@ -618,7 +670,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         const endOfWeek = currentDate.clone().endOf('week');
         
         const weekTasks = calendarTasks.filter(t => t.date && window.moment(t.date).isBetween(startOfWeek, endOfWeek, 'day', '[]'));
-        const { percent, doneCount, totalCount, doneWeight, totalWeight } = calculateWeightedProgress(weekTasks);
+        const { percent, doneCount, totalCount, doneWeight, totalWeight } = calculateWeightedProgress(weekTasks, plugin.settings.priorityWeights);
         const emoji = getPerformanceEmoji(percent);
 
         return (
@@ -646,10 +698,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
             const isToday = dateStr === window.moment().format('YYYY-MM-DD');
             const isPast = dayDate.isBefore(window.moment(), 'day');
 
-            const dTasksKPI = calendarTasks.filter(t => t.date === dateStr);
-            const { percent: dPercent, doneCount: dDone, totalCount: dTotal } = calculateWeightedProgress(dTasksKPI);
+            const dTasksKPI = calendarTasksByDate.get(dateStr) || [];
+            const { percent: dPercent, doneCount: dDone, totalCount: dTotal } = calculateWeightedProgress(dTasksKPI, plugin.settings.priorityWeights);
 
-            const dTasksFiltered = memoizedFilteredTasks.filter(t => t.date === dateStr);
+            const dTasksFiltered = visibleTasksByDate.get(dateStr) || [];
 
             const groups: Record<string, TaskItem[]> = {};
             dTasksFiltered.forEach(t => {
@@ -725,17 +777,18 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         const daysInMonth = currentDate.daysInMonth();
         const startDay = startOfMonth.day(); 
 
-        const monthTasks = memoizedFilteredTasks.filter(t => t.date && window.moment(t.date).isSame(currentDate, 'month'));
-        const monthProgress = calculateWeightedProgress(monthTasks);
+        const monthProgressTasks = tagFilteredCalendarTasks.filter(t => t.date && window.moment(t.date).isSame(currentDate, 'month'));
+        const monthProgress = calculateWeightedProgress(monthProgressTasks, plugin.settings.priorityWeights);
         const cells = [];
         for (let i = 0; i < startDay; i++) cells.push(<div key={`spacer-${i}`} className="month-board-cell spacer" />);
 
         for (let day = 1; day <= daysInMonth; day++) {
             const dateStr = currentDate.clone().date(day).format('YYYY-MM-DD');
-            const dayTasks = monthTasks.filter(t => t.date === dateStr); 
-            const { percent: dPercent, doneCount: dDone, totalCount: dTotal } = calculateWeightedProgress(dayTasks);
+            const dayVisibleTasks = sortMonthTasksForDisplay(visibleTasksByDate.get(dateStr) || [], ddlTags);
+            const dayProgressTasks = tagFilteredCalendarTasksByDate.get(dateStr) || [];
+            const { percent: dPercent, doneCount: dDone, totalCount: dTotal } = calculateWeightedProgress(dayProgressTasks, plugin.settings.priorityWeights);
             const isToday = dateStr === todayStr;
-            const previewTasks = dayTasks.slice(0, 4);
+            const previewTasks = dayVisibleTasks.slice(0, 5);
 
             cells.push(
                 <div 
@@ -755,10 +808,12 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                         </div>
                     )}
                     <div className="month-task-list">
-                        {previewTasks.map((task, idx) => (
+                        {previewTasks.map((task, idx) => {
+                            const isDdl = isDdlTask(task, ddlTags);
+                            return (
                             <div
                                 key={`${task.path}-${task.line}-${idx}`}
-                                className={`month-task-chip ${task.type === 'done' ? 'done' : ''} ${task.type === 'cancelled' ? 'cancelled' : ''} priority-level-${task.priority}`}
+                                className={`month-task-chip ${isDdl ? 'ddl' : ''} ${task.type === 'done' ? 'done' : ''} ${task.type === 'cancelled' ? 'cancelled' : ''} priority-level-${task.priority}`}
                                 draggable
                                 onDragStart={e => handleDragStart(e, task)}
                                 onDragEnd={handleDragEnd}
@@ -766,12 +821,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                                 title={`${task.fileName}: ${task.content}`}
                             >
                                 <span className="month-task-dot"></span>
-                                <span>{task.content}</span>
+                                {isDdl && <span className="month-ddl-badge">DDL</span>}
+                                <span className="month-task-title">{task.content}</span>
                             </div>
-                        ))}
-                        {dayTasks.length > previewTasks.length && (
+                            );
+                        })}
+                        {dayVisibleTasks.length > previewTasks.length && (
                             <button className="month-more-btn" onClick={() => { setCurrentDate(window.moment(dateStr)); setViewMode('day'); }}>
-                                +{dayTasks.length - previewTasks.length} 更多
+                                +{dayVisibleTasks.length - previewTasks.length} 更多
                             </button>
                         )}
                     </div>
@@ -812,31 +869,15 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         );
     }
 
-    return (
-        <div className={`task-dashboard-container ${densityClass}`}>
-            
-            {/* 🌟 悬浮收纳箱侧栏 */}
-            <div className={`inbox-drawer ${showInbox ? 'open' : ''}`}>
-                <div className="inbox-drawer-header">
-                    <h3>📥 未安排任务</h3>
-                    <button className="inbox-close-btn" onClick={() => setShowInbox(false)}>✖</button>
-                </div>
-                <div className="inbox-drawer-actions">
-                    <button className="nav-btn" onClick={() => void moveTasksToDate(inboxTasks, todayStr, 'unplanned')}>全部移到今天</button>
-                </div>
-                <div className="inbox-drawer-body">
-                    {renderInboxDirectory()}
-                    <div className="inbox-drawer-actions">
-                        {activeInboxFile && <button className="nav-btn" onClick={() => setActiveInboxFile(null)}>显示全部</button>}
-                    </div>
-                    <div className="inbox-drawer-content">
-                        {renderInboxGroups()}
-                    </div>
-                </div>
-            </div>
+    const dashboardStyle = {
+        '--inbox-sidebar-width': `${inboxSidebarWidth}px`
+    } as React.CSSProperties;
 
-            <div className="fixed-top-area">
-                <div className="dashboard-toolbar">
+    return (
+        <div className={`task-dashboard-container ${densityClass} ${showInbox ? 'inbox-open' : ''}`} style={dashboardStyle}>
+            <div className="calendar-main-pane">
+                <div className="fixed-top-area">
+                    <div className="dashboard-toolbar">
                     <div className="header-controls nav-cluster">
                         <button className="nav-btn" onClick={() => setCurrentDate(prev => prev.clone().subtract(1, viewMode === 'month' ? 'month' : (viewMode === 'week' ? 'week' : 'day')))}>❮</button>
                         <button className="nav-btn" onClick={() => setCurrentDate(prev => prev.clone().add(1, viewMode === 'month' ? 'month' : (viewMode === 'week' ? 'week' : 'day')))}>❯</button>
@@ -849,16 +890,66 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
 
                     <div className="quick-add-bar">
                         <input
+                            ref={quickAddInputRef}
                             className="quick-add-input"
                             type="text"
-                            placeholder="回车存入收纳箱"
+                            placeholder="回车存入收纳箱，输入 # 添加标签"
                             value={quickAddText}
-                            onChange={e => setQuickAddText(e.target.value)}
+                            onChange={e => {
+                                setQuickAddText(e.target.value);
+                                setQuickAddCursor(e.currentTarget.selectionStart ?? e.target.value.length);
+                            }}
+                            onClick={e => setQuickAddCursor(e.currentTarget.selectionStart ?? quickAddText.length)}
+                            onKeyUp={e => {
+                                if (!['ArrowDown', 'ArrowUp', 'Enter', 'Escape'].includes(e.key)) {
+                                    setQuickAddCursor(e.currentTarget.selectionStart ?? quickAddText.length);
+                                }
+                            }}
                             onKeyDown={e => {
+                                if (quickAddTagSuggestions.length > 0) {
+                                    if (e.key === 'ArrowDown') {
+                                        e.preventDefault();
+                                        setActiveTagSuggestionIndex(prev => (prev + 1) % quickAddTagSuggestions.length);
+                                        return;
+                                    }
+                                    if (e.key === 'ArrowUp') {
+                                        e.preventDefault();
+                                        setActiveTagSuggestionIndex(prev => (prev - 1 + quickAddTagSuggestions.length) % quickAddTagSuggestions.length);
+                                        return;
+                                    }
+                                    if (e.key === 'Escape') {
+                                        e.preventDefault();
+                                        setQuickAddCursor(0);
+                                        return;
+                                    }
+                                    if (e.key === 'Enter') {
+                                        e.preventDefault();
+                                        const tag = quickAddTagSuggestions[activeTagSuggestionIndex];
+                                        if (tag) applyTagSuggestion(tag);
+                                        return;
+                                    }
+                                }
                                 if (e.key === 'Enter' && !isAddingTask) void handleQuickAdd();
                             }}
                             disabled={isAddingTask}
                         />
+                        {quickAddTagSuggestions.length > 0 && (
+                            <div className="quick-add-tag-suggestions">
+                                {quickAddTagSuggestions.map((tag, index) => (
+                                    <button
+                                        key={tag}
+                                        type="button"
+                                        className={`quick-add-tag-suggestion ${index === activeTagSuggestionIndex ? 'active' : ''}`}
+                                        onMouseDown={event => {
+                                            event.preventDefault();
+                                            applyTagSuggestion(tag);
+                                        }}
+                                    >
+                                        {tag}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
                         <button className={`nav-btn inbox-toggle-btn ${showInbox ? 'active' : ''}`} onClick={() => setShowInbox(!showInbox)}>
                             未安排 <span className="inbox-badge">{inboxTasks.length}</span>
                         </button>
@@ -891,9 +982,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                             <button className={`view-btn ${viewMode === 'day' ? 'active' : ''}`} onClick={() => setViewMode('day')}>日</button>
                         </div>
                     </div>
-                </div>
+                    </div>
 
-                {filterEnabled && (
+                    {filterEnabled && (
                     <div className="icalendar-filter-panel" style={{ padding: '12px', borderRadius: '8px', background: 'rgba(0,0,0,0.05)', border: '1px solid var(--ios-border)', marginTop: '8px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                             <div style={{ fontSize: '0.9em', fontWeight: 'bold', color: 'var(--text-primary)' }}>标签筛选 (当前视图)</div>
@@ -936,22 +1027,43 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                             })}
                         </div>
                     </div>
-                )}
+                    )}
 
-                {viewMode !== 'month' && renderDock()}
+                    {viewMode !== 'month' && renderDock()}
+                </div>
+
+                <div className="view-content-area">
+                    {viewMode === 'day' && (
+                        <div className="day-view-scrollable">
+                            <div style={{ fontSize: '1.4em', fontWeight: 800, marginBottom: '16px', paddingLeft: '4px', color: 'var(--text-primary)' }}>{currentDate.format('MM.DD dddd')}</div>
+                            {renderDailyList(currentDate.format('YYYY-MM-DD'))}
+                        </div>
+                    )}
+
+                    {viewMode === 'week' && renderWeekCols()}
+                    {viewMode === 'month' && renderMonthView()}
+                </div>
             </div>
 
-            <div className="view-content-area">
-                {viewMode === 'day' && (
-                    <div className="day-view-scrollable">
-                        <div style={{ fontSize: '1.4em', fontWeight: 800, marginBottom: '16px', paddingLeft: '4px', color: 'var(--text-primary)' }}>{currentDate.format('MM.DD dddd')}</div>
-                        {renderDailyList(currentDate.format('YYYY-MM-DD'))}
+            <aside className="inbox-sidebar" aria-label="未安排任务" aria-hidden={!showInbox}>
+                <div className="inbox-resize-handle" onMouseDown={handleInboxResizeStart} title="拖动调整宽度" />
+                <div className="inbox-drawer-header">
+                    <h3>📥 未安排任务</h3>
+                    <button className="inbox-close-btn" onClick={() => setShowInbox(false)}>✖</button>
+                </div>
+                <div className="inbox-drawer-actions">
+                    <button className="nav-btn" onClick={() => void moveTasksToDate(inboxTasks, todayStr, 'unplanned')}>全部移到今天</button>
+                </div>
+                <div className="inbox-drawer-body">
+                    {renderInboxDirectory()}
+                    <div className="inbox-drawer-actions">
+                        {activeInboxFile && <button className="nav-btn" onClick={() => setActiveInboxFile(null)}>显示全部</button>}
                     </div>
-                )}
-                
-                {viewMode === 'week' && renderWeekCols()}
-                {viewMode === 'month' && renderMonthView()}
-            </div>
+                    <div className="inbox-drawer-content">
+                        {renderInboxGroups()}
+                    </div>
+                </div>
+            </aside>
             
         </div>
     );

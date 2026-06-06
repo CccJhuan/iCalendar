@@ -1,9 +1,10 @@
 /* eslint-disable obsidianmd/ui/sentence-case */
-import { Plugin, ItemView, WorkspaceLeaf, TFile, Notice, MarkdownView, Modal } from 'obsidian';
+import { Plugin, ItemView, WorkspaceLeaf, TFile, Notice, MarkdownView, Modal, getAllTags } from 'obsidian';
 import { createRoot, Root } from 'react-dom/client';
 import * as React from 'react';
 import { ICalendarSettings, DEFAULT_SETTINGS, ICalendarSettingTab } from './settings';
 import { Dashboard } from './icalendar';
+import { normalizeTag, normalizeTagList } from './calendar-utils';
 
 export const VIEW_TYPE_ICALENDAR = "icalendar-view";
 
@@ -173,6 +174,7 @@ export default class ICalendarPlugin extends Plugin {
     settings!: ICalendarSettings; 
     private taskCache: Map<string, TaskItem[]> = new Map();
     private reminderShownKeys: Set<string> = new Set();
+    private vaultTagCache: string[] | null = null;
 
     private normalizeMarkdownPath(path: string): string {
         const normalizedPath = path.trim().replace(/\\/g, '/');
@@ -202,8 +204,21 @@ export default class ICalendarPlugin extends Plugin {
             void this.initialFetch();
             this.startReminderLoop();
         });
+        this.registerEvent(this.app.metadataCache.on('changed', () => {
+            this.invalidateVaultTagCache();
+        }));
+        this.registerEvent(this.app.metadataCache.on('deleted', () => {
+            this.invalidateVaultTagCache();
+        }));
+        this.registerEvent(this.app.vault.on('rename', () => {
+            this.invalidateVaultTagCache();
+        }));
 
         this.addSettingTab(new ICalendarSettingTab(this.app, this));
+    }
+
+    private invalidateVaultTagCache(): void {
+        this.vaultTagCache = null;
     }
 
     private startReminderLoop(): void {
@@ -391,6 +406,28 @@ export default class ICalendarPlugin extends Plugin {
         return customApp.plugins?.plugins?.dataview?.api;
     }
 
+    getAllVaultTags(): string[] {
+        if (this.vaultTagCache) return this.vaultTagCache;
+
+        const tags = new Map<string, string>();
+
+        this.app.vault.getMarkdownFiles().forEach(file => {
+            const cache = this.app.metadataCache.getFileCache(file);
+            if (!cache) return;
+
+            const fileTags = getAllTags(cache) || [];
+            fileTags.forEach(rawTag => {
+                const tag = normalizeTag(rawTag);
+                if (!tag) return;
+                const key = tag.toLowerCase();
+                if (!tags.has(key)) tags.set(key, tag);
+            });
+        });
+
+        this.vaultTagCache = Array.from(tags.values()).sort((a, b) => a.localeCompare(b));
+        return this.vaultTagCache;
+    }
+
     async fetchTasksFromDataview(): Promise<TaskItem[]> {
         await new Promise(resolve => setTimeout(resolve, 50));
 
@@ -576,7 +613,12 @@ export default class ICalendarPlugin extends Plugin {
     }
 
     async loadSettings(): Promise<void> {
-        this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<ICalendarSettings>);
+        const savedSettings = await this.loadData() as Partial<ICalendarSettings>;
+        this.settings = Object.assign({}, DEFAULT_SETTINGS, savedSettings);
+        this.settings.priorityWeights = Object.assign({}, DEFAULT_SETTINGS.priorityWeights, this.settings.priorityWeights);
+        this.settings.ddlTags = normalizeTagList(this.settings.ddlTags ?? DEFAULT_SETTINGS.ddlTags);
+        this.settings.taskReminderTimes = this.settings.taskReminderTimes ?? DEFAULT_SETTINGS.taskReminderTimes;
+        this.settings.inboxSidebarWidth = Math.min(560, Math.max(280, this.settings.inboxSidebarWidth || DEFAULT_SETTINGS.inboxSidebarWidth));
     }
 
     async saveSettings(): Promise<void> {
