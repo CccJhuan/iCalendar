@@ -231,6 +231,39 @@
 [draggable="true"]:active { cursor: grabbing; }
 .dragging { opacity: 0.4; transform: scale(0.98); }
 .drop-zone-active { border-color: var(--morandi-1) !important; background: var(--morandi-1-bg) !important; }
+.mobile-drop-active {
+    border-color: var(--morandi-1) !important;
+    background: var(--morandi-1-bg) !important;
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ios-blue) 38%, transparent);
+}
+
+.mobile-drag-source {
+    opacity: 0.35;
+}
+
+.mobile-drag-ghost {
+    position: fixed;
+    left: 0;
+    top: 0;
+    z-index: 10000;
+    pointer-events: none;
+    box-shadow: var(--ios-shadow);
+    opacity: 0.94;
+    transform-origin: top left;
+    touch-action: none;
+}
+
+.mobile-drag-ghost-measuring {
+    pointer-events: none;
+}
+
+.mobile-layout .dashboard-toolbar .quick-add-bar,
+.mobile-layout .dashboard-toolbar .right-controls > .header-controls,
+.mobile-layout .dashboard-toolbar .group-switcher,
+.mobile-layout .priority-dock,
+.mobile-layout .icalendar-filter-panel {
+    display: none !important;
+}
 
 .view-content-area { flex: 1; overflow: hidden; display: flex; flex-direction: column; }
 
@@ -1519,5 +1552,321 @@
 
     .inbox-resize-handle {
         display: none;
+    }
+}
+
+@media (max-width: 700px) {
+    .task-dashboard-container.mobile-layout {
+        padding: 6px;
+        gap: 6px;
+        flex-direction: column;
+    }
+
+    .mobile-layout .calendar-main-pane {
+        gap: 6px;
+        min-height: 0;
+    }
+
+    .mobile-layout .fixed-top-area {
+        gap: 5px;
+        padding-bottom: 5px;
+    }
+
+    .mobile-layout .dashboard-toolbar {
+        display: grid;
+        grid-template-columns: auto minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 5px;
+        min-height: 32px;
+    }
+
+    .mobile-layout .dashboard-toolbar .quick-add-bar,
+    .mobile-layout .dashboard-toolbar .right-controls > .header-controls,
+    .mobile-layout .dashboard-toolbar .group-switcher,
+    .mobile-layout .priority-dock,
+    .mobile-layout .icalendar-filter-panel,
+    .mobile-layout .inbox-sidebar {
+        display: none !important;
+    }
+
+    .mobile-layout .dashboard-toolbar .header-controls.nav-cluster {
+        min-width: 0;
+        padding: 2px;
+        gap: 2px;
+    }
+
+    .mobile-layout .dashboard-toolbar .dashboard-title {
+        min-width: 0;
+        text-align: center;
+        font-size: 0.95em;
+        overflow: hidden;
+        text-overflow: clip;
+    }
+
+    .mobile-layout .dashboard-toolbar .right-controls {
+        justify-content: flex-end;
+        min-width: 0;
+        gap: 0;
+    }
+
+    .mobile-layout .dashboard-toolbar .view-switcher {
+        padding: 2px;
+        gap: 2px;
+    }
+
+    .mobile-layout .dashboard-toolbar .nav-btn,
+    .mobile-layout .dashboard-toolbar .view-btn,
+    .mobile-layout .dashboard-toolbar .group-btn {
+        min-height: 30px;
+        padding: 3px 7px;
+        font-size: 0.78em;
+    }
+
+    .mobile-layout .view-content-area {
+        min-height: 0;
+    }
+
+    .mobile-layout .day-view-scrollable {
+        padding-right: 0;
+    }
+
+    .mobile-layout .day-view-title {
+        font-size: 1em !important;
+        margin-bottom: 7px !important;
+        padding-left: 2px !important;
+    }
+
+    .mobile-layout .file-groups-container {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+    }
+
+    .mobile-layout .file-group-card {
+        padding: 0 7px 7px;
+        gap: 5px;
+        border-radius: 9px;
+    }
+
+    .mobile-layout .file-group-header {
+        padding: 7px 0 5px;
+        font-size: 0.78em;
+    }
+
+    .mobile-layout .ios-task-item {
+        padding: 7px 8px;
+        gap: 8px;
+        border-radius: 9px;
+        touch-action: pan-y;
+    }
+
+    .mobile-layout .ios-checkbox,
+    .mobile-layout .mini-task-check {
+        width: 28px;
+        height: 28px;
+        font-size: 12px;
+    }
+
+    .mobile-layout .task-content-wrapper {
+        gap: 4px;
+    }
+
+    .mobile-layout .task-text,
+    .mobile-layout .mini-task-content {
+        font-size: 0.84em;
+        line-height: 1.25;
+    }
+
+    .mobile-layout .task-meta-row,
+    .mobile-layout .task-meta-row-full {
+        flex-direction: row;
+        align-items: flex-start;
+        gap: 4px;
+    }
+
+    .mobile-layout .tag-container {
+        gap: 3px;
+    }
+
+    .mobile-layout .task-tag {
+        font-size: 0.6em;
+        padding: 1px 4px;
+        line-height: 1.18;
+    }
+
+    .mobile-layout .task-actions {
+        display: none;
+    }
+
+    .mobile-layout .weekly-insights {
+        padding: 7px 8px;
+        gap: 4px;
+        border-radius: 8px;
+    }
+
+    .mobile-layout .insights-header {
+        align-items: center;
+    }
+
+    .mobile-layout .insights-title {
+        font-size: 0.75em;
+    }
+
+    .mobile-layout .insights-stats {
+        font-size: 1.1em;
+    }
+
+    .mobile-layout .week-view {
+        grid-template-columns: repeat(7, minmax(72vw, 1fr));
+        gap: 7px;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scroll-snap-type: x proximity;
+        padding-bottom: 4px;
+    }
+
+    .mobile-layout .week-col {
+        min-width: 72vw;
+        padding: 7px 7px 0;
+        border-radius: 10px;
+        scroll-snap-align: start;
+    }
+
+    .mobile-layout .week-col-header {
+        font-size: 0.78em;
+        padding-bottom: 6px;
+    }
+
+    .mobile-layout .week-col-tasks {
+        gap: 5px;
+        margin-top: 5px;
+    }
+
+    .mobile-layout .week-file-group {
+        gap: 4px;
+    }
+
+    .mobile-layout .week-file-header {
+        font-size: 0.68em;
+    }
+
+    .mobile-layout .mini-task {
+        padding: 6px 7px;
+        gap: 4px;
+        border-radius: 8px;
+        touch-action: pan-y;
+    }
+
+    .mobile-layout .mini-task-main-row {
+        gap: 6px;
+    }
+
+    .mobile-layout .mini-task .tag-container {
+        flex-basis: 100%;
+    }
+
+    .mobile-layout .month-board-wrapper {
+        gap: 5px;
+    }
+
+    .mobile-layout .month-board-summary {
+        padding: 6px 7px;
+        border-radius: 9px;
+        gap: 8px;
+    }
+
+    .mobile-layout .month-summary-meta {
+        font-size: 0.66em;
+    }
+
+    .mobile-layout .month-summary-progress {
+        min-width: 96px;
+        gap: 5px;
+        font-size: 0.74em;
+    }
+
+    .mobile-layout .month-summary-progress .progress-container {
+        min-width: 62px;
+    }
+
+    .mobile-layout .month-board-grid {
+        grid-template-columns: repeat(7, minmax(38px, 1fr));
+        grid-template-rows: 18px repeat(6, minmax(76px, 1fr));
+        gap: 3px;
+        overflow: hidden auto;
+        padding-bottom: 2px;
+    }
+
+    .mobile-layout .month-day-header {
+        font-size: 0.62em;
+    }
+
+    .mobile-layout .month-board-cell {
+        min-height: 76px;
+        border-radius: 7px;
+    }
+
+    .mobile-layout .month-cell-header {
+        padding: 4px 4px 2px;
+    }
+
+    .mobile-layout .month-day-number {
+        font-size: 0.72em;
+    }
+
+    .mobile-layout .month-day-stats {
+        font-size: 0.58em;
+    }
+
+    .mobile-layout .month-progress {
+        height: 2px;
+        margin: 0 4px 3px;
+    }
+
+    .mobile-layout .month-task-list {
+        gap: 2px;
+        padding: 0 3px 4px;
+        overflow: hidden;
+    }
+
+    .mobile-layout .month-task-chip {
+        min-height: 0;
+        padding: 1px 3px;
+        gap: 2px;
+        border-radius: 5px;
+        border-left-width: 2px;
+        font-size: 0.58em;
+        line-height: 1.14;
+        touch-action: pan-y;
+    }
+
+    .mobile-layout .month-task-dot {
+        width: 4px;
+        height: 4px;
+        margin-top: 2px;
+    }
+
+    .mobile-layout .month-ddl-badge {
+        font-size: 0.52em;
+        padding: 1px 2px;
+    }
+
+    .mobile-layout .month-task-chip .month-task-title {
+        white-space: normal;
+        overflow: visible;
+        overflow-wrap: anywhere;
+        word-break: break-word;
+    }
+
+    .mobile-layout .month-task-chip span:last-child {
+        overflow: visible;
+        text-overflow: clip;
+        white-space: normal;
+    }
+
+    .mobile-layout .month-more-btn {
+        font-size: 0.58em;
+        padding: 0 2px;
+        line-height: 1.1;
     }
 }

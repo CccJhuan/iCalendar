@@ -7,6 +7,8 @@ import {
     filterVisibleTasks,
     getTagFragment,
     groupTasksByDate,
+    getMobileMonthPreview,
+    parseMoveTarget,
     normalizeTagList,
     sortMonthTasksForDisplay,
     type CalendarTaskLike
@@ -78,4 +80,25 @@ test('groups dated tasks by date and skips undated tasks', () => {
     assert.equal(grouped.get('2026-06-06')?.length, 2);
     assert.equal(grouped.get('2026-06-07')?.length, 1);
     assert.equal(grouped.has(''), false);
+});
+
+test('builds a restrained mobile month preview with DDL tasks first', () => {
+    const tasks: CalendarTaskLike[] = [
+        { date: '2026-06-06', type: 'todo', priority: 2, tags: ['#work'] },
+        { date: '2026-06-06', type: 'todo', priority: 5, tags: ['#deadline'] },
+        { date: '2026-06-06', type: 'todo', priority: 1, tags: ['#home'] },
+        { date: '2026-06-06', type: 'done', priority: 3, tags: ['#DDL'] }
+    ];
+
+    const preview = getMobileMonthPreview(tasks, ['#deadline', '#ddl'], 2);
+
+    assert.deepEqual(preview.tasks.map(task => task.tags[0]), ['#deadline', '#DDL']);
+    assert.equal(preview.remainingCount, 2);
+});
+
+test('parses DOM move target values for drag and touch drops', () => {
+    assert.deepEqual(parseMoveTarget('2026-06-06', null), { date: '2026-06-06', priority: null });
+    assert.deepEqual(parseMoveTarget('2026-06-06', '5'), { date: '2026-06-06', priority: 5 });
+    assert.deepEqual(parseMoveTarget('', 'done'), { date: null, priority: 'done' });
+    assert.deepEqual(parseMoveTarget(null, 'bad'), null);
 });

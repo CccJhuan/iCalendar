@@ -19,6 +19,16 @@ export interface TagFragment {
     query: string;
 }
 
+export interface MonthPreview<T> {
+    tasks: T[];
+    remainingCount: number;
+}
+
+export interface MoveTarget {
+    date: string | null;
+    priority: number | 'done' | null;
+}
+
 export function normalizeTag(tag: string): string | null {
     const cleaned = tag.trim().replace(/^#+/, '');
     if (!cleaned) return null;
@@ -81,6 +91,32 @@ export function sortMonthTasksForDisplay<T extends CalendarTaskLike>(tasks: T[],
             return a.index - b.index;
         })
         .map(item => item.task);
+}
+
+export function getMobileMonthPreview<T extends CalendarTaskLike>(tasks: T[], ddlTags: string[], limit = 2): MonthPreview<T> {
+    const safeLimit = Math.max(0, Math.floor(limit));
+    const sortedTasks = sortMonthTasksForDisplay(tasks, ddlTags);
+
+    return {
+        tasks: sortedTasks.slice(0, safeLimit),
+        remainingCount: Math.max(0, sortedTasks.length - safeLimit)
+    };
+}
+
+export function parseMoveTarget(dateValue: string | null, priorityValue: string | null): MoveTarget | null {
+    const date = dateValue || null;
+    let priority: MoveTarget['priority'] = null;
+
+    if (priorityValue === 'done') {
+        priority = 'done';
+    } else if (priorityValue !== null && priorityValue.trim() !== '') {
+        const parsed = Number(priorityValue);
+        if (!Number.isInteger(parsed)) return null;
+        priority = parsed;
+    }
+
+    if (!date && priority === null) return null;
+    return { date, priority };
 }
 
 export function getTagFragment(value: string, cursor: number): TagFragment | null {

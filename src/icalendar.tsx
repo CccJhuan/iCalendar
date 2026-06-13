@@ -1,5 +1,6 @@
 import * as React from 'react';
 import { useState, useMemo, useEffect, useRef } from 'react';
+import { Platform } from 'obsidian';
 import type { TaskItem } from './main';
 import type ICalendarPlugin from './main';
 import {
@@ -7,11 +8,14 @@ import {
     completeTagAtCursor,
     filterTagSuggestions,
     filterVisibleTasks,
+    getMobileMonthPreview,
     groupTasksByDate,
     isDdlTask,
     normalizeTagList,
+    parseMoveTarget,
     sortMonthTasksForDisplay
 } from './calendar-utils';
+import type { MoveTarget } from './calendar-utils';
 
 // 🌟 修复：定义严格的鸭子类型接口，彻底拒绝 any
 interface FallbackNotice {
@@ -54,10 +58,26 @@ type DataviewMetadataCache = {
 
 type MoveScope = 'all' | 'overdue' | 'unplanned';
 type TaskGroups = Record<string, TaskItem[]>;
+type MobileDragTimer = number;
+
+interface MobileDragState {
+    task: TaskItem;
+    pointerId: number;
+    startX: number;
+    startY: number;
+    sourceEl: HTMLElement;
+    ghostEl: HTMLElement | null;
+    activeDropEl: HTMLElement | null;
+    longPressTimer: MobileDragTimer | null;
+    started: boolean;
+}
 
 const INBOX_MIN_WIDTH = 280;
 const INBOX_MAX_WIDTH = 560;
 const TAG_SUGGESTION_LIMIT = 12;
+const MOBILE_LONG_PRESS_MS = 350;
+const MOBILE_DRAG_CANCEL_DISTANCE = 12;
+const MOBILE_MONTH_PREVIEW_LIMIT = 2;
 
 const PRIORITY_MAP: Record<number, { label: string, classId: number, icon: string }> = {
     5: { label: '最高', classId: 5, icon: '🔺' },
@@ -69,6 +89,8 @@ const PRIORITY_MAP: Record<number, { label: string, classId: number, icon: strin
 };
 
 export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
+    const isMobileRuntime = Platform.isMobile;
+    const isPhoneRuntime = Platform.isPhone;
     const [viewMode, setViewMode] = useState<'month' | 'week' | 'day'>(plugin.settings.defaultView);
     const [groupMode, setGroupMode] = useState<'file' | 'priority'>(plugin.settings.defaultGroup);
     const [currentDate, setCurrentDate] = useState(window.moment());
@@ -91,9 +113,23 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
     const [inboxSidebarWidth, setInboxSidebarWidth] = useState(() => Math.min(INBOX_MAX_WIDTH, Math.max(INBOX_MIN_WIDTH, plugin.settings.inboxSidebarWidth)));
     const [quickAddCursor, setQuickAddCursor] = useState(0);
     const [activeTagSuggestionIndex, setActiveTagSuggestionIndex] = useState(0);
+    const [isMobileDragging, setIsMobileDragging] = useState(false);
+    const [isNarrowViewport, setIsNarrowViewport] = useState(() => window.matchMedia('(max-width: 700px)').matches);
+    const mobileDragRef = useRef<MobileDragState | null>(null);
+    const suppressNextClickRef = useRef(false);
 
     const todayStr = window.moment().format('YYYY-MM-DD');
     const ddlTags = useMemo(() => normalizeTagList(plugin.settings.ddlTags), [plugin.settings.ddlTags]);
+    const useTouchDrag = isMobileRuntime;
+    const useMobileLayout = isPhoneRuntime || isNarrowViewport;
+
+    useEffect(() => {
+        const mediaQuery = window.matchMedia('(max-width: 700px)');
+        const handleViewportChange = (event: MediaQueryListEvent) => setIsNarrowViewport(event.matches);
+        setIsNarrowViewport(mediaQuery.matches);
+        mediaQuery.addEventListener('change', handleViewportChange);
+        return () => mediaQuery.removeEventListener('change', handleViewportChange);
+    }, []);
 
     useEffect(() => {
         let isMounted = true;
@@ -269,6 +305,42 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         window.addEventListener('mouseup', handleMouseUp);
     };
 
+    const moveDraggedTask = async (draggedTask: TaskItem, target: MoveTarget) => {
+        const originalTaskState = { ...draggedTask };
+        try {
+            if (target.priority === 'done') {
+                if (draggedTask.type === 'todo') {
+                    setTasks(prev => prev.map(t => (t.path === draggedTask.path && t.line === draggedTask.line) ? { ...t, type: 'done' } : t));
+                    await plugin.toggleTask(draggedTask);
+                    showUndoNotice("任务已完成", originalTaskState);
+                }
+                return;
+            }
+
+            if (typeof target.priority === 'number' && draggedTask.type === 'done') {
+                const nextPriority = target.priority;
+                setTasks(prev => prev.map(t => (t.path === draggedTask.path && t.line === draggedTask.line)
+                    ? { ...t, type: 'todo', date: target.date || t.date, priority: nextPriority }
+                    : t));
+                await plugin.toggleTask(draggedTask);
+                await plugin.updateTaskMetadata(draggedTask, target.date, nextPriority);
+                showUndoNotice("任务已更新", originalTaskState);
+                return;
+            }
+
+            setTasks(prev => prev.map(t => (t.path === draggedTask.path && t.line === draggedTask.line)
+                ? { ...t, date: target.date || t.date, priority: typeof target.priority === 'number' ? target.priority : t.priority }
+                : t));
+            await plugin.updateTaskMetadata(draggedTask, target.date, target.priority);
+            showUndoNotice("任务已更新", originalTaskState);
+
+        } catch (err) {
+            setTasks(prev => prev.map(t => (t.path === originalTaskState.path && t.line === originalTaskState.line) ? originalTaskState : t));
+            console.error("Task move sync failed:", err);
+            createNotice("移动失败，请检查任务所在文件是否可写");
+        }
+    };
+
     const handleDragStart = (e: React.DragEvent<HTMLDivElement>, task: TaskItem) => {
         e.dataTransfer.setData('application/json', JSON.stringify(task));
         e.dataTransfer.effectAllowed = 'move';
@@ -285,36 +357,153 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
         if (!data) return;
         try {
             const draggedTask = JSON.parse(data) as unknown as TaskItem;
-            const originalTaskState = { ...draggedTask };
-
-            if (newPrio === 'done') {
-                if (draggedTask.type === 'todo') {
-                    setTasks(prev => prev.map(t => (t.path === draggedTask.path && t.line === draggedTask.line) ? { ...t, type: 'done' } : t));
-                    await plugin.toggleTask(draggedTask);
-                    showUndoNotice("任务已完成", originalTaskState);
-                }
-                return;
-            }
-
-            if (typeof newPrio === 'number' && draggedTask.type === 'done') {
-                setTasks(prev => prev.map(t => (t.path === draggedTask.path && t.line === draggedTask.line) ? { ...t, type: 'todo', priority: newPrio } : t));
-                await plugin.toggleTask(draggedTask); 
-                await plugin.updateTaskMetadata(draggedTask, newDate, newPrio);
-                return;
-            }
-
-            // 此处：无论是原生日历任务，还是从收纳箱拖出来的无日期任务，只要追加了日期属性，
-            // 就会自动触发过滤逻辑的重置，从收纳箱进入日历流。物理行号无需位移，确保安全。
-            setTasks(prev => prev.map(t => (t.path === draggedTask.path && t.line === draggedTask.line) 
-                ? { ...t, date: newDate || t.date, priority: typeof newPrio === 'number' ? newPrio : t.priority } 
-                : t));
-            await plugin.updateTaskMetadata(draggedTask, newDate, newPrio);
-            showUndoNotice("任务已更新", originalTaskState);
-
+            const target = parseMoveTarget(newDate, newPrio === null ? null : String(newPrio));
+            if (target) await moveDraggedTask(draggedTask, target);
         } catch (err) {
             console.error("Drop sync failed:", err);
         }
     };
+
+    const getTouchDropTarget = (clientX: number, clientY: number): { target: MoveTarget; element: HTMLElement } | null => {
+        if (mobileDragRef.current?.ghostEl) {
+            mobileDragRef.current.ghostEl.addClass('mobile-drag-ghost-measuring');
+        }
+        const el = document.elementFromPoint(clientX, clientY);
+        if (mobileDragRef.current?.ghostEl) {
+            mobileDragRef.current.ghostEl.removeClass('mobile-drag-ghost-measuring');
+        }
+        if (!(el instanceof HTMLElement)) return null;
+
+        const dropEl = el.closest<HTMLElement>('[data-icalendar-drop-date], [data-icalendar-drop-priority]');
+        if (!dropEl) return null;
+
+        const target = parseMoveTarget(
+            dropEl.dataset.icalendarDropDate || null,
+            dropEl.dataset.icalendarDropPriority || null
+        );
+        if (!target) return null;
+
+        return { target, element: dropEl };
+    };
+
+    const moveMobileGhost = (event: PointerEvent) => {
+        const state = mobileDragRef.current;
+        if (!state?.ghostEl) return;
+        state.ghostEl.style.transform = `translate3d(${event.clientX + 12}px, ${event.clientY + 12}px, 0)`;
+    };
+
+    const clearMobileDrag = () => {
+        const state = mobileDragRef.current;
+        if (!state) return;
+        if (state.longPressTimer) window.clearTimeout(state.longPressTimer);
+        state.sourceEl.removeClass('mobile-drag-source');
+        state.activeDropEl?.removeClass('mobile-drop-active');
+        state.ghostEl?.remove();
+        mobileDragRef.current = null;
+        setIsMobileDragging(false);
+    };
+
+    const startMobileDrag = (event: PointerEvent) => {
+        const state = mobileDragRef.current;
+        if (!state) return;
+
+        const rect = state.sourceEl.getBoundingClientRect();
+        const ghost = state.sourceEl.cloneNode(true) as HTMLElement;
+        ghost.addClass('mobile-drag-ghost');
+        ghost.style.width = `${Math.min(rect.width, 280)}px`;
+        ghost.style.transform = `translate3d(${event.clientX + 12}px, ${event.clientY + 12}px, 0)`;
+        document.body.appendChild(ghost);
+
+        state.started = true;
+        state.ghostEl = ghost;
+        state.longPressTimer = null;
+        suppressNextClickRef.current = true;
+        state.sourceEl.addClass('mobile-drag-source');
+        setIsMobileDragging(true);
+    };
+
+    const handleMobilePointerMove = (event: PointerEvent) => {
+        const state = mobileDragRef.current;
+        if (!state || event.pointerId !== state.pointerId) return;
+
+        const distance = Math.hypot(event.clientX - state.startX, event.clientY - state.startY);
+        if (!state.started && distance > MOBILE_DRAG_CANCEL_DISTANCE) {
+            clearMobileDrag();
+            return;
+        }
+        if (!state.started) return;
+
+        event.preventDefault();
+        moveMobileGhost(event);
+        const dropTarget = getTouchDropTarget(event.clientX, event.clientY);
+        if (state.activeDropEl !== dropTarget?.element) {
+            state.activeDropEl?.removeClass('mobile-drop-active');
+            dropTarget?.element.addClass('mobile-drop-active');
+            state.activeDropEl = dropTarget?.element ?? null;
+        }
+    };
+
+    const handleMobilePointerUp = (event: PointerEvent) => {
+        const state = mobileDragRef.current;
+        if (!state || event.pointerId !== state.pointerId) return;
+
+        if (!state.started) {
+            clearMobileDrag();
+            window.removeEventListener('pointermove', handleMobilePointerMove);
+            window.removeEventListener('pointerup', handleMobilePointerUp);
+            window.removeEventListener('pointercancel', handleMobilePointerCancel);
+            return;
+        }
+
+        event.preventDefault();
+        const dropTarget = getTouchDropTarget(event.clientX, event.clientY);
+        const draggedTask = state.task;
+        clearMobileDrag();
+        window.removeEventListener('pointermove', handleMobilePointerMove);
+        window.removeEventListener('pointerup', handleMobilePointerUp);
+        window.removeEventListener('pointercancel', handleMobilePointerCancel);
+        if (dropTarget) void moveDraggedTask(draggedTask, dropTarget.target);
+    };
+
+    const handleMobilePointerCancel = (event: PointerEvent) => {
+        const state = mobileDragRef.current;
+        if (!state || event.pointerId !== state.pointerId) return;
+        clearMobileDrag();
+        window.removeEventListener('pointermove', handleMobilePointerMove);
+        window.removeEventListener('pointerup', handleMobilePointerUp);
+        window.removeEventListener('pointercancel', handleMobilePointerCancel);
+    };
+
+    const handleMobileDragPointerDown = (event: React.PointerEvent<HTMLElement>, task: TaskItem) => {
+        if (!isMobileRuntime || event.pointerType === 'mouse' || task.type === 'cancelled') return;
+        if (event.button !== 0) return;
+
+        const sourceEl = event.currentTarget;
+        mobileDragRef.current = {
+            task,
+            pointerId: event.pointerId,
+            startX: event.clientX,
+            startY: event.clientY,
+            sourceEl,
+            ghostEl: null,
+            activeDropEl: null,
+            longPressTimer: window.setTimeout(() => startMobileDrag(event.nativeEvent), MOBILE_LONG_PRESS_MS),
+            started: false
+        };
+
+        window.addEventListener('pointermove', handleMobilePointerMove, { passive: false });
+        window.addEventListener('pointerup', handleMobilePointerUp, { passive: false });
+        window.addEventListener('pointercancel', handleMobilePointerCancel, { passive: false });
+    };
+
+    useEffect(() => {
+        return () => {
+            clearMobileDrag();
+            window.removeEventListener('pointermove', handleMobilePointerMove);
+            window.removeEventListener('pointerup', handleMobilePointerUp);
+            window.removeEventListener('pointercancel', handleMobilePointerCancel);
+        };
+    }, []);
 
     const moveTaskToDate = async (task: TaskItem, dateStr: string) => {
         const originalTaskState = { ...task };
@@ -404,6 +593,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
     const handleOpenTask = async (event: React.MouseEvent<HTMLElement>, task: TaskItem) => {
         event.preventDefault();
         event.stopPropagation();
+        if (suppressNextClickRef.current) {
+            suppressNextClickRef.current = false;
+            return;
+        }
         try {
             await plugin.openTaskLocation(task);
         } catch (err) {
@@ -453,7 +646,14 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
             : `accent-type-${task.colorIndex}`;
 
         return (
-            <div key={key} className={`mini-task ${task.type} ${cardBorderClass}`} draggable onDragStart={e => handleDragStart(e, task)} onDragEnd={handleDragEnd}>
+            <div
+                key={key}
+                className={`mini-task ${task.type} ${cardBorderClass}`}
+                draggable={!useTouchDrag}
+                onDragStart={e => handleDragStart(e, task)}
+                onDragEnd={handleDragEnd}
+                onPointerDown={e => handleMobileDragPointerDown(e, task)}
+            >
                 <div className="mini-task-main-row">
                     <a className="internal-link-wrapper internal-link" data-href={task.path} href={task.path} onClick={(e) => void handleOpenTask(e, task)}>
                         <div className="mini-task-content" style={{textDecoration: task.type === 'done' || task.type === 'cancelled' ? 'line-through' : 'none'}}>
@@ -558,6 +758,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                 return (
                     <div 
                         key={level} className="dock-item"
+                        data-icalendar-drop-priority={String(level)}
                         style={{ color: `var(--priority-${level > 3 ? 'high' : (level === 3 ? 'med' : (level === 2 ? 'primary' : 'low'))})` }}
                         onDragOver={e => { e.preventDefault(); (e.currentTarget as HTMLElement).addClass('drag-over'); }}
                         onDragLeave={e => (e.currentTarget as HTMLElement).removeClass('drag-over')}
@@ -620,6 +821,8 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                         <div 
                             key={key} 
                             className={`file-group-card ${cardClass}`}
+                            data-icalendar-drop-date={isCancelledGroup ? undefined : dateStr}
+                            data-icalendar-drop-priority={isDoneGroup ? 'done' : (groupMode === 'priority' && !isCancelledGroup ? key : undefined)}
                             onDragOver={e => { e.preventDefault(); (e.currentTarget as HTMLElement).addClass('drop-zone-active'); }}
                             onDragLeave={e => (e.currentTarget as HTMLElement).removeClass('drop-zone-active')}
                             onDrop={e => { 
@@ -633,9 +836,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                                 <div 
                                     key={`${t.path}-${t.line}-${idx}`} 
                                     className={`ios-task-item ${t.type === 'done' ? 'checked' : ''} ${t.type === 'cancelled' ? 'cancelled' : ''}`}
-                                    draggable 
+                                    draggable={!useTouchDrag}
                                     onDragStart={e => handleDragStart(e, t)} 
                                     onDragEnd={handleDragEnd}
+                                    onPointerDown={e => handleMobileDragPointerDown(e, t)}
                                 >
                                     <div 
                                         className={`ios-checkbox ${t.type === 'done' ? 'checked' : 'unchecked'} ${t.type === 'cancelled' ? 'cancelled' : ''}`}
@@ -725,6 +929,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
             cols.push(
                 <div 
                     key={dateStr} className={`week-col ${isToday ? 'today' : ''} ${isPast ? 'past' : ''}`}
+                    data-icalendar-drop-date={dateStr}
                     onDragOver={e => { e.preventDefault(); (e.currentTarget as HTMLElement).addClass('drop-zone-active'); }}
                     onDragLeave={e => (e.currentTarget as HTMLElement).removeClass('drop-zone-active')}
                     onDrop={e => { (e.currentTarget as HTMLElement).removeClass('drop-zone-active'); void handleDrop(e, dateStr, null); }}
@@ -788,12 +993,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
             const dayProgressTasks = tagFilteredCalendarTasksByDate.get(dateStr) || [];
             const { percent: dPercent, doneCount: dDone, totalCount: dTotal } = calculateWeightedProgress(dayProgressTasks, plugin.settings.priorityWeights);
             const isToday = dateStr === todayStr;
-            const previewTasks = dayVisibleTasks.slice(0, 5);
+            const mobilePreview = getMobileMonthPreview(dayVisibleTasks, ddlTags, MOBILE_MONTH_PREVIEW_LIMIT);
+            const previewTasks = useMobileLayout ? mobilePreview.tasks : dayVisibleTasks.slice(0, 5);
+            const remainingPreviewCount = useMobileLayout
+                ? mobilePreview.remainingCount
+                : Math.max(0, dayVisibleTasks.length - previewTasks.length);
 
             cells.push(
                 <div 
                     key={dateStr} 
                     className={`month-board-cell ${isToday ? 'today' : ''} ${dTotal > 0 ? 'has-tasks' : ''}`}
+                    data-icalendar-drop-date={dateStr}
                     onDragOver={e => { e.preventDefault(); (e.currentTarget as HTMLElement).addClass('drop-zone-active'); }}
                     onDragLeave={e => (e.currentTarget as HTMLElement).removeClass('drop-zone-active')}
                     onDrop={e => { (e.currentTarget as HTMLElement).removeClass('drop-zone-active'); void handleDrop(e, dateStr, null); }}
@@ -814,9 +1024,10 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                             <div
                                 key={`${task.path}-${task.line}-${idx}`}
                                 className={`month-task-chip ${isDdl ? 'ddl' : ''} ${task.type === 'done' ? 'done' : ''} ${task.type === 'cancelled' ? 'cancelled' : ''} priority-level-${task.priority}`}
-                                draggable
+                                draggable={!useTouchDrag}
                                 onDragStart={e => handleDragStart(e, task)}
                                 onDragEnd={handleDragEnd}
+                                onPointerDown={e => handleMobileDragPointerDown(e, task)}
                                 onClick={(e) => void handleOpenTask(e, task)}
                                 title={`${task.fileName}: ${task.content}`}
                             >
@@ -826,9 +1037,9 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                             </div>
                             );
                         })}
-                        {dayVisibleTasks.length > previewTasks.length && (
+                        {remainingPreviewCount > 0 && (
                             <button className="month-more-btn" onClick={() => { setCurrentDate(window.moment(dateStr)); setViewMode('day'); }}>
-                                +{dayVisibleTasks.length - previewTasks.length} 更多
+                                +{remainingPreviewCount} 更多
                             </button>
                         )}
                     </div>
@@ -872,9 +1083,17 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
     const dashboardStyle = {
         '--inbox-sidebar-width': `${inboxSidebarWidth}px`
     } as React.CSSProperties;
+    const dashboardClasses = [
+        'task-dashboard-container',
+        densityClass,
+        showInbox && !useMobileLayout ? 'inbox-open' : '',
+        useMobileLayout ? 'mobile-layout' : '',
+        isMobileRuntime ? 'mobile-runtime' : '',
+        isMobileDragging ? 'mobile-dragging' : ''
+    ].filter(Boolean).join(' ');
 
     return (
-        <div className={`task-dashboard-container ${densityClass} ${showInbox ? 'inbox-open' : ''}`} style={dashboardStyle}>
+        <div className={dashboardClasses} style={dashboardStyle}>
             <div className="calendar-main-pane">
                 <div className="fixed-top-area">
                     <div className="dashboard-toolbar">
@@ -984,7 +1203,7 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                     </div>
                     </div>
 
-                    {filterEnabled && (
+                    {filterEnabled && !useMobileLayout && (
                     <div className="icalendar-filter-panel" style={{ padding: '12px', borderRadius: '8px', background: 'rgba(0,0,0,0.05)', border: '1px solid var(--ios-border)', marginTop: '8px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
                             <div style={{ fontSize: '0.9em', fontWeight: 'bold', color: 'var(--text-primary)' }}>标签筛选 (当前视图)</div>
@@ -1029,13 +1248,13 @@ export const Dashboard: React.FC<DashboardProps> = ({ plugin }) => {
                     </div>
                     )}
 
-                    {viewMode !== 'month' && renderDock()}
+                    {viewMode !== 'month' && !useMobileLayout && renderDock()}
                 </div>
 
                 <div className="view-content-area">
                     {viewMode === 'day' && (
                         <div className="day-view-scrollable">
-                            <div style={{ fontSize: '1.4em', fontWeight: 800, marginBottom: '16px', paddingLeft: '4px', color: 'var(--text-primary)' }}>{currentDate.format('MM.DD dddd')}</div>
+                            <div className="day-view-title" style={{ fontSize: '1.4em', fontWeight: 800, marginBottom: '16px', paddingLeft: '4px', color: 'var(--text-primary)' }}>{currentDate.format('MM.DD dddd')}</div>
                             {renderDailyList(currentDate.format('YYYY-MM-DD'))}
                         </div>
                     )}
